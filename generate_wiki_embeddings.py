@@ -215,7 +215,7 @@ class XMLStreamParser:
         """Stream articles from compressed XML dump"""
         self.logger.info(f"Opening XML dump: {self.xml_path}")
         
-    with bz2.open(self.xml_path, 'rb') as f:
+        with bz2.open(self.xml_path, 'rb') as f:
 
             # Use iterparse for memory efficiency
             context = ET.iterparse(f, events=('end',))
