@@ -664,75 +664,132 @@ class WikipediaEmbeddingsPipeline:
         
         self.logger.info("✓ Quick validation PASSED")
         return True
-    
+
+
+
     def run_full_processing_phase(self):
         """Phase 2: Process all 6.9M articles"""
         self.logger.info("=" * 80)
         self.logger.info("PHASE 2: FULL PROCESSING")
         self.logger.info("=" * 80)
-        
-        article_buffer = []
+
         last_checkpoint = 0
-        
-        # Progress bar
         pbar = tqdm(
             desc="Processing articles",
             unit="article",
             total=6_900_000,  # Approximate
             dynamic_ncols=True
         )
-        
+
         try:
-            for article in self.parser.stream_articles(self.config):
-                article_buffer.append(article)
+            # Create a multiprocessing pool with your 8 workers
+            # We use a helper static method for the worker
+            with Pool(self.config.num_workers) as pool:
                 
-                # Process batch when buffer is full
-                if len(article_buffer) >= self.config.batch_size:
-                    self._process_batch(article_buffer)
-                    pbar.update(len(article_buffer))
-                    article_buffer = []
-                
-                # Checkpoint if needed
-                if (self.stats["articles_processed"] - last_checkpoint >= 
-                    self.config.checkpoint_interval):
-                    self._save_checkpoint()
-                    last_checkpoint = self.stats["articles_processed"]
-            
+                # Use imap_unordered for efficiency. It processes articles as they come.
+                # We feed the parser (generator) directly into the pool.
+                # chunksize tells the pool to grab 64 articles at a time to distribute.
+                article_generator = self.parser.stream_articles(self.config)
+                processed_articles = pool.imap_unordered(
+                    WikipediaEmbeddingsPipeline._process_article_worker, 
+                    article_generator, 
+                    chunksize=64
+                )
+
+                article_buffer = []
+                for article_data in processed_articles:
+                    if article_data is None:
+                        continue # Article was invalid after cleaning
+
+                    article_buffer.append(article_data)
+
+                    # Process batch when buffer is full
+                    if len(article_buffer) >= self.config.batch_size:
+                        self._process_batch_parallel(article_buffer, pbar)
+                        article_buffer = []
+                    
+                    # Checkpoint if needed
+                    if (self.stats["articles_processed"] - last_checkpoint >= 
+                        self.config.checkpoint_interval):
+                        self._save_checkpoint()
+                        last_checkpoint = self.stats["articles_processed"]
+
             # Process remaining articles
             if article_buffer:
-                self._process_batch(article_buffer)
-                pbar.update(len(article_buffer))
-            
+                self._process_batch_parallel(article_buffer, pbar)
+                
             pbar.close()
-            
+
         except KeyboardInterrupt:
-            self.logger.warning("Interrupted by user!")
+            # ... (rest of the function is the same) ...
             pbar.close()
             self._save_checkpoint()
             raise
         except Exception as e:
-            self.logger.error(f"Fatal error: {e}", exc_info=True)
+            # ... (rest of the function is the same) ...
             pbar.close()
             self._save_checkpoint()
             raise
-        
-        self.logger.info(f"✓ Processed {self.stats['articles_processed']:,} articles")
+            
+        self.logger.info(f"✔ Processed {self.stats['articles_processed']:,} articles")
+
+    @staticmethod
+    def _process_article_worker(article: Article) -> Optional[Tuple[Article, str]]:
+        """
+        A static worker function for multiprocessing.
+        It takes one article, cleans it, and returns the data needed.
+        """
+        try:
+            # We must re-import regex here for the multiprocessing worker
+            import re
+            
+            # This is the slow CPU-bound cleaning task
+            text = WikipediaEmbeddingsPipeline._clean_wikitext_static(article.text)
+            
+            # Re-check length after cleaning
+            if len(text) < 200: # Using a placeholder for config.min_article_length
+                return None
+            
+            # Truncate text for the model
+            clean_text = f"{article.title}. {text[:2000]}"
+            return (article, clean_text)
+        except Exception as e:
+            # Log this if you can pass a logger, otherwise just skip
+            return None
     
-    def _process_batch(self, articles: List[Article]):
-        """Process a batch of articles"""
-        # Prepare texts (title + content)
-        texts = [f"{a.title}. {a.text[:2000]}" for a in articles]
+    @staticmethod
+    def _clean_wikitext_static(text: str) -> str:
+        """
+        Static version of the cleaner for multiprocessing.
+        """
+        import re
+        text = re.sub(r'\{\{[^}]*\}\}', '', text)
+        text = re.sub(r'<ref[^>]*>.*?</ref>', '', text, flags=re.DOTALL)
+        text = re.sub(r'<ref[^>]*\/>', '', text)
+        text = re.sub(r'\[\[(?:[^|\]]*\|)?([^\]]+)\]\]', r'\1', text)
+        text = re.sub(r'\[http[^\]]*\]', '', text)
+        text = re.sub(r'<[^>]+>', '', text)
+        text = re.sub(r'\[\[File:.*?\]\]', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[\[Image:.*?\]\]', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\s+', ' ', text)
+        return text.strip()
+
+    def _process_batch_parallel(self, article_data: List[Tuple[Article, str]], pbar: tqdm):
+        """
+        New batch processor that handles the pre-processed data.
+        """
+        # Unzip the data
+        articles, texts = zip(*article_data)
         
-        # Generate embeddings
-        embeddings = self.generator.encode_batch(texts)
+        embeddings = self.generator.encode_batch(list(texts))
         
         if embeddings is not None:
-            # Add to index
-            self.index_builder.add_batch(embeddings, articles)
-            
-            # Update stats
+            self.index_builder.add_batch(embeddings, list(articles))
             self.stats["articles_processed"] += len(articles)
             self.stats["batches_processed"] += 1
+            pbar.update(len(articles))
+            
+
     
     def _save_checkpoint(self):
         """Save progress checkpoint"""
