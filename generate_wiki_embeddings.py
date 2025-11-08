@@ -516,6 +516,13 @@ class ValidationSuite:
             # Encode query
             query_emb = model.encode([query_text], normalize_embeddings=True)
             
+            # Ensure correct numpy array format
+            if not isinstance(query_emb, np.ndarray):
+                query_emb = np.array(query_emb)
+            query_emb = query_emb.astype(np.float32)
+            if query_emb.ndim == 1:
+                query_emb = query_emb.reshape(1, -1)
+            
             # Search index
             k = 10
             distances, indices = self.index.search(query_emb, k)
