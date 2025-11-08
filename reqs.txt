@@ -1,0 +1,9 @@
+# Core dependencies
+torch==2.1.0
+sentence-transformers==2.2.2
+faiss-gpu==1.7.2
+numpy==1.24.3
+tqdm==4.66.1
+
+# Optional but recommended
+psutil==5.9.5
