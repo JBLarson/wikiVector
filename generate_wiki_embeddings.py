@@ -4,15 +4,11 @@ WIKIPEDIA EMBEDDINGS GENERATION SYSTEM
 Production-grade pipeline for generating semantic embeddings of all English Wikipedia articles.
 
 Architecture:
-- Multi-process XML parsing with 8 workers
+- Multi-process XML parsing with 8 workers (Producer-Consumer)
 - GPU-optimized batched encoding with FP16
 - Incremental FAISS index building
 - Robust checkpointing every 100K articles
 - Comprehensive validation and quality checks
-
-Author: Production ML System
-Target: GCP n1-standard-8 with NVIDIA T4
-Expected Runtime: 90 minutes for 6.9M articles
 """
 
 import os
@@ -23,10 +19,12 @@ import time
 import sqlite3
 import hashlib
 import logging
+import re
+from glob import glob
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Iterator, List, Tuple, Optional
-from multiprocessing import Pool, Manager  # <-- ADDED Manager
+from multiprocessing import Pool, Manager, Process, Queue
 from queue import Empty
 from lxml import etree as ET
 
@@ -45,7 +43,8 @@ class Config:
     """System configuration parameters"""
     
     # Paths
-    xml_dump_path: str = "/mnt/data/wikipedia/raw/enwiki-20251101-pages-articles-multistream.xml" # <-- EDITED (no .bz2)
+    # This is now the DIRECTORY of split XML files
+    xml_chunk_dir: str = "/mnt/data/wikipedia/raw/xml_chunks/" 
     output_dir: str = "/mnt/data/wikipedia/embeddings"
     checkpoint_dir: str = "/mnt/data/wikipedia/checkpoints"
     
@@ -103,7 +102,7 @@ def setup_logging(config: Config):
     return logging.getLogger(__name__)
 
 # ============================================================================
-# XML PARSING - MULTI-PROCESS STREAMING
+# XML PARSING (WORKER)
 # ============================================================================
 
 @dataclass
@@ -112,99 +111,106 @@ class Article:
     page_id: int
     title: str
     namespace: int
-    text: str
-    
-    def is_valid(self, config: Config) -> bool:
-        """Check if article meets quality criteria"""
-        if self.namespace != 0:
-            return False
-        if len(self.text) < config.min_article_length:
-            return False
-        if len(self.text) > config.max_article_length:
-            return False
-        if self.title.startswith("List_of_"):
-            return False
-        if "(disambiguation)" in self.title.lower():
-            return False
-        return True
+    text: str # This will be the CLEANED text
 
-class XMLStreamParser:
-    """Memory-efficient streaming XML parser for Wikipedia dumps"""
-    
-    def __init__(self, xml_path: str, logger: logging.Logger):
-        self.xml_path = xml_path
-        self.logger = logger
-        self.namespace = "{http://www.mediawiki.org/xml/export-0.11/}"
-        
-    def parse_page(self, page_elem) -> Optional[Article]:
-        """Extract article data from XML page element"""
-        try:
-            # Extract title
-            title_elem = page_elem.find(f"{self.namespace}title")
-            if title_elem is None or not title_elem.text:
-                return None
-            title = title_elem.text.strip().replace(" ", "_")
-            
-            # Extract namespace
-            ns_elem = page_elem.find(f"{self.namespace}ns")
-            namespace = int(ns_elem.text) if ns_elem is not None else 0
-            
-            # Extract page ID
-            id_elem = page_elem.find(f"{self.namespace}id")
-            if id_elem is None:
-                return None
-            page_id = int(id_elem.text)
-            
-            # Check for redirect
-            redirect_elem = page_elem.find(f"{self.namespace}redirect")
-            if redirect_elem is not None:
-                return None
-            
-            # Extract text content
-            revision = page_elem.find(f"{self.namespace}revision")
-            if revision is None:
-                return None
-            
-            text_elem = revision.find(f"{self.namespace}text")
-            if text_elem is None or not text_elem.text:
-                return None
-            
-            text = text_elem.text  # <-- DO NOT CLEAN HERE, pass raw text
-            
-            return Article(
-                page_id=page_id,
-                title=title,
-                namespace=namespace,
-                text=text
-            )
-            
-        except Exception as e:
-            self.logger.warning(f"Failed to parse page: {e}")
-            return None
-    
-    # <-- REMOVED _clean_wikitext from this class
+def _clean_wikitext(text: str) -> str:
+    """Static version of the cleaner for multiprocessing."""
+    text = re.sub(r'\{\{[^}]*\}\}', '', text)
+    text = re.sub(r'<ref[^>]*>.*?</ref>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<ref[^>]*\/>', '', text)
+    text = re.sub(r'\[\[(?:[^|\]]*\|)?([^\]]+)\]\]', r'\1', text)
+    text = re.sub(r'\[http[^\]]*\]', '', text)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'\[\[File:.*?\]\]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\[\[Image:.*?\]\]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
 
-    def stream_articles(self, config: Config) -> Iterator[Article]:
-        """Stream articles from compressed XML dump"""
-        self.logger.info(f"Opening XML dump: {self.xml_path}")
+def xml_parser_worker(
+    xml_file_path: str, 
+    queue: Queue,
+    config: Config
+):
+    """
+    This is the producer function.
+    It runs in a separate process.
+    It takes ONE XML chunk file, parses it, cleans it,
+    and puts the results into the shared queue.
+    """
+    try:
+        namespace = "{http://www.mediawiki.org/xml/export-0.11/}"
         
-        with open(self.xml_path, 'rb') as f: # <-- EDITED (no bz2)
-            # Use iterparse for memory efficiency
+        with open(xml_file_path, 'rb') as f:
             context = ET.iterparse(f, events=('end',))
             
             for event, elem in context:
-                if elem.tag == f"{self.namespace}page":
-                    article = self.parse_page(elem)
+                if elem.tag == f"{namespace}page":
+                    try:
+                        # Extract title
+                        title_elem = elem.find(f"{namespace}title")
+                        if title_elem is None or not title_elem.text:
+                            continue
+                        title = title_elem.text.strip().replace(" ", "_")
+                        
+                        # Extract namespace
+                        ns_elem = elem.find(f"{namespace}ns")
+                        namespace = int(ns_elem.text) if ns_elem is not None else 0
+                        
+                        # Extract page ID
+                        id_elem = elem.find(f"{namespace}id")
+                        if id_elem is None:
+                            continue
+                        page_id = int(id_elem.text)
+                        
+                        # Check for redirect
+                        if elem.find(f"{namespace}redirect") is not None:
+                            continue
+                        
+                        # Extract text content
+                        revision = elem.find(f"{namespace}revision")
+                        if revision is None:
+                            continue
+                        
+                        text_elem = revision.find(f"{namespace}text")
+                        if text_elem is None or not text_elem.text:
+                            continue
+                        
+                        # --- Filtering & Cleaning ---
+                        if namespace != 0:
+                            continue
+                        if title.startswith("List_of_"):
+                            continue
+                        if "(disambiguation)" in title.lower():
+                            continue
+
+                        text = _clean_wikitext(text_elem.text)
+                        
+                        if len(text) < config.min_article_length or len(text) > config.max_article_length:
+                            continue
+                        
+                        # --- Send to Consumer ---
+                        article = Article(
+                            page_id=page_id,
+                            title=title,
+                            namespace=namespace,
+                            text=text # Store clean text
+                        )
+                        model_input_text = f"{title}. {text[:2000]}"
+                        
+                        queue.put((article, model_input_text))
                     
-                    if article: # <-- Pass validation to worker
-                        yield article
+                    except Exception as e:
+                        # Log and continue if a single page fails
+                        logging.warning(f"Failed to parse page in {xml_file_path}: {e}")
                     
-                    # Critical: clear element to free memory
-                    elem.clear()
-                    
-                    # Also clear parent references
-                    while elem.getprevious() is not None:
-                        del elem.getparent()[0]
+                    finally:
+                        # Critical: clear element to free memory
+                        elem.clear()
+                        while elem.getprevious() is not None:
+                            del elem.getparent()[0]
+
+    except Exception as e:
+        logging.error(f"Worker failed on {xml_file_path}: {e}")
 
 # ============================================================================
 # EMBEDDING GENERATION - GPU OPTIMIZED
@@ -220,57 +226,41 @@ class EmbeddingGenerator:
         self.model = self._load_model()
         
     def _setup_device(self) -> str:
-        """Detect and configure GPU"""
         if torch.cuda.is_available():
             device = "cuda"
             gpu_name = torch.cuda.get_device_name(0)
             gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
             self.logger.info(f"GPU detected: {gpu_name} ({gpu_memory:.1f}GB)")
-            
-            # Enable TF32 for Ampere GPUs (not applicable to T4, but safe to enable)
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
-            
         else:
             device = "cpu"
             self.logger.warning("No GPU detected, using CPU (will be much slower)")
-        
         return device
     
     def _load_model(self) -> SentenceTransformer:
-        """Load and configure sentence transformer model"""
         self.logger.info(f"Loading model: {self.config.model_name}")
-        
         model = SentenceTransformer(self.config.model_name, device=self.device)
         model.max_seq_length = self.config.max_seq_length
-        
         if self.config.use_fp16 and self.device == "cuda":
             model = model.half()
             self.logger.info("Enabled FP16 inference for 2x speedup")
-        
-        # Warm up model
         _ = model.encode(["warmup"], show_progress_bar=False)
-        
         return model
     
     def encode_batch(self, texts: List[str]) -> np.ndarray:
-        """Encode batch of texts to embeddings"""
         try:
             embeddings = self.model.encode(
                 texts,
                 batch_size=self.config.batch_size,
                 show_progress_bar=False,
                 convert_to_numpy=True,
-                normalize_embeddings=True  # L2 normalization for cosine similarity
+                normalize_embeddings=True
             )
-            
-            # Validate embeddings
             if np.any(np.isnan(embeddings)) or np.any(np.isinf(embeddings)):
                 self.logger.error("NaN or Inf detected in embeddings!")
                 return None
-            
             return embeddings.astype(np.float32)
-            
         except RuntimeError as e:
             if "out of memory" in str(e):
                 self.logger.error("GPU OOM! Reduce batch size")
@@ -282,6 +272,8 @@ class EmbeddingGenerator:
 # ============================================================================
 
 class FAISSIndexBuilder:
+    # (This class is unchanged, so I am omitting it for brevity)
+    # (Just copy/paste your original FAISSIndexBuilder class here)
     """Incremental FAISS index construction with optimization"""
     
     def __init__(self, config: Config, logger: logging.Logger):
@@ -418,12 +410,13 @@ class FAISSIndexBuilder:
         
         self.logger.info(f"Final index saved: {index_path}")
         self.logger.info(f"Metadata DB: {output_path / 'wikipedia_metadata.db'}")
-
 # ============================================================================
 # VALIDATION
 # ============================================================================
 
 class ValidationSuite:
+    # (This class is also unchanged, omit for brevity)
+    # (Just copy/paste your original ValidationSuite class here)
     """Comprehensive validation and quality checks"""
     
     def __init__(
@@ -537,7 +530,6 @@ class ValidationSuite:
         self.logger.info(f"Search latency: {report['search_latency_ms']['mean']:.2f}ms (mean)")
         
         return report
-
 # ============================================================================
 # MAIN PIPELINE
 # ============================================================================
@@ -552,7 +544,7 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info("WIKIPEDIA EMBEDDINGS GENERATION PIPELINE")
         self.logger.info("=" * 80)
         
-        self.parser = XMLStreamParser(config.xml_dump_path, self.logger)
+        # NO parser here!
         self.generator = EmbeddingGenerator(config, self.logger)
         self.index_builder = FAISSIndexBuilder(config, self.logger)
         self.validator = ValidationSuite(config, self.index_builder, self.logger)
@@ -565,119 +557,109 @@ class WikipediaEmbeddingsPipeline:
             "checkpoints_saved": 0
         }
     
-    def run_quick_validation_phase(self):
-        """Phase 1: Quick validation with first 10K articles"""
-        self.logger.info("=" * 80)
-        self.logger.info("PHASE 1: QUICK VALIDATION (10K articles)")
-        self.logger.info("=" * 80)
-        
-        # Use the parallel processing for validation too
-        article_buffer = []
-        processed_count = 0
-        
-        with Pool(self.config.num_workers) as pool:
-            article_generator = self.parser.stream_articles(self.config)
-            processed_articles = pool.imap(
-                _process_article_worker, 
-                article_generator, 
-                chunksize=64
-            )
+    # --- NO QUICK VALIDATION PHASE, omitting for this final fix ---
 
-            for article_data in processed_articles:
-                if article_data:
-                    article_buffer.append(article_data)
-                    processed_count += 1
-                
-                if len(article_buffer) >= self.config.batch_size:
-                    self._process_batch_parallel(article_buffer)
-                    article_buffer = []
-
-                if processed_count >= self.config.quick_validation_size:
-                    break
-        
-        if article_buffer:
-            self._process_batch_parallel(article_buffer)
-
-        self.logger.info(f"Collected {self.index_builder.index.ntotal} articles for validation")
-        
-        recall = self.validator.run_semantic_validation(self.generator.model)
-        self.logger.info(f"Quick validation complete - Recall@10: {recall:.3f}")
-        
-        self.logger.info("✔ Quick validation PASSED")
-        return True
-    
     def run_full_processing_phase(self):
-        """Phase 2: Process all 6.9M articles"""
+        """Phase 2: Process all articles using Producer-Consumer"""
         self.logger.info("=" * 80)
-        self.logger.info("PHASE 2: FULL PROCESSING")
+        self.logger.info("PHASE 2: FULL PROCESSING (Producer-Consumer)")
         self.logger.info("=" * 80)
         
-        last_checkpoint = 0
+        # Get list of all XML chunk files
+        xml_files = glob(f"{self.config.xml_chunk_dir}/*.xml*")
+        if not xml_files:
+            self.logger.error(f"No XML chunks found in {self.config.xml_chunk_dir}")
+            raise FileNotFoundError("Run the xml_split command first")
+            
+        self.logger.info(f"Found {len(xml_files)} XML chunks to process.")
+
+        # Create a shared queue
+        manager = Manager()
+        article_queue = manager.Queue(maxsize=1024) # Max 1024 batches in memory
+
+        # Start producer pool
+        producer_pool = Pool(self.config.num_workers)
+        producer_args = [(f, article_queue, self.config) for f in xml_files]
+        producer_pool.starmap_async(xml_parser_worker, producer_args)
+        producer_pool.close() # No more tasks will be added
+        
+        self.logger.info(f"Started {self.config.num_workers} producers...")
+
+        # --- This (the main thread) is now the CONSUMER ---
         
         pbar = tqdm(
             desc="Processing articles",
             unit="article",
-            total=6_900_000,
+            total=6_900_000, # Approx
             dynamic_ncols=True
         )
         
+        article_buffer = []
+        texts_buffer = []
+        last_checkpoint = 0
+        
         try:
-            with Pool(self.config.num_workers) as pool:
-                article_generator = self.parser.stream_articles(self.config)
-                # Use imap for ordered processing, chunksize to reduce overhead
-                processed_articles = pool.imap(
-                    _process_article_worker, 
-                    article_generator, 
-                    chunksize=256  # <-- Tuned chunksize
-                )
-
-                article_buffer = []
-                for article_data in processed_articles:
-                    if article_data is None:
-                        self.stats["articles_skipped"] += 1
-                        continue
-
-                    article_buffer.append(article_data)
-
-                    if len(article_buffer) >= self.config.batch_size:
-                        self._process_batch_parallel(article_buffer, pbar)
-                        article_buffer = []
+            while True:
+                try:
+                    # Get data from the queue
+                    article, model_input_text = article_queue.get(timeout=30)
                     
+                    article_buffer.append(article)
+                    texts_buffer.append(model_input_text)
+                    
+                    # Process batch when buffer is full
+                    if len(article_buffer) >= self.config.batch_size:
+                        self._process_batch(article_buffer, texts_buffer, pbar)
+                        article_buffer, texts_buffer = [], []
+                    
+                    # Checkpoint if needed
                     if (self.stats["articles_processed"] - last_checkpoint >= 
                         self.config.checkpoint_interval):
                         self._save_checkpoint()
                         last_checkpoint = self.stats["articles_processed"]
 
+                except Empty:
+                    # If queue is empty, check if producers are done
+                    if not producer_pool._cache: # Undocumented, but checks if pool is done
+                        self.logger.info("Queue is empty and producers are finished.")
+                        break
+                    else:
+                        self.logger.info("Queue empty, waiting for producers...")
+                        time.sleep(5)
+            
+            # Process any remaining articles
             if article_buffer:
-                self._process_batch_parallel(article_buffer, pbar)
+                self._process_batch(article_buffer, texts_buffer, pbar)
             
             pbar.close()
+            producer_pool.join()
+            self.logger.info("All producers joined.")
 
         except KeyboardInterrupt:
             self.logger.warning("Interrupted by user!")
+            producer_pool.terminate()
             pbar.close()
             self._save_checkpoint()
             raise
         except Exception as e:
-            self.logger.error(f"Fatal error: {e}", exc_info=True)
+            self.logger.error(f"Fatal error in consumer: {e}", exc_info=True)
+            producer_pool.terminate()
             pbar.close()
             self._save_checkpoint()
             raise
         
         self.logger.info(f"✔ Processed {self.stats['articles_processed']:,} articles")
-    
-    def _process_batch_parallel(self, article_data: List[Tuple[Article, str]], pbar: tqdm = None):
-        """New batch processor that handles the pre-processed data"""
-        articles, texts = zip(*article_data)
+
+    def _process_batch(self, articles: List[Article], texts: List[str], pbar: tqdm):
+        """Process a batch of articles (Consumer side)"""
         
-        embeddings = self.generator.encode_batch(list(texts))
+        embeddings = self.generator.encode_batch(texts)
         
         if embeddings is not None:
-            self.index_builder.add_batch(embeddings, list(articles))
+            self.index_builder.add_batch(embeddings, articles)
             self.stats["articles_processed"] += len(articles)
             self.stats["batches_processed"] += 1
-            if pbar:
-                pbar.update(len(articles))
+            pbar.update(len(articles))
 
     def _save_checkpoint(self):
         """Save progress checkpoint"""
@@ -689,42 +671,30 @@ class WikipediaEmbeddingsPipeline:
         self.stats["checkpoints_saved"] += 1
     
     def run_optimization_phase(self):
-        """Phase 3: Optimize index for production"""
+        # (Unchanged)
         self.logger.info("=" * 80)
         self.logger.info("PHASE 3: INDEX OPTIMIZATION")
         self.logger.info("=" * 80)
-        
         self.index_builder.optimize_index()
         self.logger.info("✔ Index optimization complete")
     
     def run_final_validation_phase(self):
-        """Phase 4: Final validation and reporting"""
+        # (Unchanged)
         self.logger.info("=" * 80)
         self.logger.info("PHASE 4: FINAL VALIDATION")
         self.logger.info("=" * 80)
-        
         report = self.validator.run_full_validation()
-        
         report["pipeline_stats"] = self.stats
         report["pipeline_stats"]["total_time_seconds"] = time.time() - self.stats["start_time"]
-        
         report_path = Path(self.config.output_dir) / "validation_report.json"
         with open(report_path, 'w') as f:
             json.dump(report, f, indent=2)
-        
         self.logger.info(f"✔ Validation report saved: {report_path}")
-        
         return report
     
     def run(self):
         """Execute full pipeline"""
         try:
-            # Phase 1: Quick validation
-            # SKIPPING FOR NOW TO GO STRAIGHT TO FULL RUN
-            # if not self.run_quick_validation_phase():
-            #     self.logger.error("Quick validation failed, aborting")
-            #     return False
-            
             # Phase 2: Full processing
             self.run_full_processing_phase()
             
@@ -746,14 +716,12 @@ class WikipediaEmbeddingsPipeline:
             return False
     
     def _print_summary(self, report: dict):
-        """Print final summary"""
+        # (Unchanged)
         self.logger.info("=" * 80)
         self.logger.info("PIPELINE COMPLETE!")
         self.logger.info("=" * 80)
-        
         total_time = report["pipeline_stats"]["total_time_seconds"]
         articles = report["total_articles"]
-        
         self.logger.info(f"Total articles: {articles:,}")
         self.logger.info(f"Total time: {total_time/3600:.2f} hours")
         self.logger.info(f"Throughput: {articles/(total_time/60):.0f} articles/min")
@@ -765,69 +733,19 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info(f"  - validation_report.json")
 
 # ============================================================================
-# WORKER FUNCTIONS (FOR MULTIPROCESSING)
-# ============================================================================
-
-def _clean_wikitext_static(text: str) -> str:
-    """Static version of the cleaner for multiprocessing."""
-    import re
-    text = re.sub(r'\{\{[^}]*\}\}', '', text)
-    text = re.sub(r'<ref[^>]*>.*?</ref>', '', text, flags=re.DOTALL)
-    text = re.sub(r'<ref[^>]*\/>', '', text)
-    text = re.sub(r'\[\[(?:[^|\]]*\|)?([^\]]+)\]\]', r'\1', text)
-    text = re.sub(r'\[http[^\]]*\]', '', text)
-    text = re.sub(r'<[^>]+>', '', text)
-    text = re.sub(r'\[\[File:.*?\]\]', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\[\[Image:.*?\]\]', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip()
-
-def _process_article_worker(article: Article) -> Optional[Tuple[Article, str]]:
-    """
-    A static worker function for multiprocessing.
-    It takes one article, cleans it, validates it, and returns the data.
-    """
-    try:
-        # Check namespace and title
-        if article.namespace != 0:
-            return None
-        if article.title.startswith("List_of_"):
-            return None
-        if "(disambiguation)" in article.title.lower():
-            return None
-
-        # Clean text
-        text = _clean_wikitext_static(article.text)
-        
-        # Check length after cleaning
-        if len(text) < 200 or len(text) > 100000:
-            return None
-        
-        # Update article text with clean text
-        article.text = text
-        
-        # Prepare model input
-        model_input_text = f"{article.title}. {text[:2000]}"
-        return (article, model_input_text)
-    
-    except Exception as e:
-        return None
-
-# ============================================================================
 # ENTRY POINT
 # ============================================================================
 
 def main():
     """Main entry point"""
     
-    # Set tokenizer parallelism to false to suppress warnings
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     
     config = Config()
     
-    if not Path(config.xml_dump_path).exists():
-        print(f"ERROR: Wikipedia dump not found: {config.xml_dump_path}")
-        print("Please ensure the file is decompressed and the path is correct")
+    if not Path(config.xml_chunk_dir).exists():
+        print(f"ERROR: Wikipedia chunk dir not found: {config.xml_chunk_dir}")
+        print("Please ensure the xml_split command has been run")
         sys.exit(1)
     
     Path(config.output_dir).mkdir(parents=True, exist_ok=True)
@@ -839,4 +757,6 @@ def main():
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
+    # This is critical for multiprocessing with CUDA
+    torch.multiprocessing.set_start_method('spawn', force=True)
     main()
