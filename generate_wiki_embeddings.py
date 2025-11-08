@@ -272,8 +272,6 @@ class EmbeddingGenerator:
 # ============================================================================
 
 class FAISSIndexBuilder:
-    # (This class is unchanged, so I am omitting it for brevity)
-    # (Just copy/paste your original FAISSIndexBuilder class here)
     """Incremental FAISS index construction with optimization"""
     
     def __init__(self, config: Config, logger: logging.Logger):
@@ -410,13 +408,16 @@ class FAISSIndexBuilder:
         
         self.logger.info(f"Final index saved: {index_path}")
         self.logger.info(f"Metadata DB: {output_path / 'wikipedia_metadata.db'}")
+
+
+
+
+
 # ============================================================================
 # VALIDATION
 # ============================================================================
 
 class ValidationSuite:
-    # (This class is also unchanged, omit for brevity)
-    # (Just copy/paste your original ValidationSuite class here)
     """Comprehensive validation and quality checks"""
     
     def __init__(
@@ -530,6 +531,9 @@ class ValidationSuite:
         self.logger.info(f"Search latency: {report['search_latency_ms']['mean']:.2f}ms (mean)")
         
         return report
+
+
+
 # ============================================================================
 # MAIN PIPELINE
 # ============================================================================
@@ -557,7 +561,6 @@ class WikipediaEmbeddingsPipeline:
             "checkpoints_saved": 0
         }
     
-    # --- NO QUICK VALIDATION PHASE, omitting for this final fix ---
 
     def run_full_processing_phase(self):
         """Phase 2: Process all articles using Producer-Consumer"""
@@ -757,6 +760,5 @@ def main():
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
-    # This is critical for multiprocessing with CUDA
     torch.multiprocessing.set_start_method('spawn', force=True)
     main()
