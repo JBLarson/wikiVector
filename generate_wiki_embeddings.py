@@ -45,7 +45,7 @@ class Config:
     """System configuration parameters"""
     
     # Paths
-    xml_dump_path: str = "/mnt/data/wikipedia/raw/enwiki-20251101-pages-articles-multistream.xml.bz2"
+    xml_dump_path: str = "/mnt/data/wikipedia/raw/enwiki-20251101-pages-articles-multistream.xml"
     output_dir: str = "/mnt/data/wikipedia/embeddings"
     checkpoint_dir: str = "/mnt/data/wikipedia/checkpoints"
     
@@ -215,8 +215,7 @@ class XMLStreamParser:
         """Stream articles from compressed XML dump"""
         self.logger.info(f"Opening XML dump: {self.xml_path}")
         
-        with bz2.open(self.xml_path, 'rb') as f:
-
+        with open(self.xml_path, 'rb') as f:
             # Use iterparse for memory efficiency
             context = ET.iterparse(f, events=('end',))
             
