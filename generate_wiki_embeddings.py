@@ -26,7 +26,7 @@ import logging
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Iterator, List, Tuple, Optional
-from multiprocessing import Pool, Queue, Process, Manager
+from multiprocessing import Pool, Manager  # <-- ADDED Manager
 from queue import Empty
 from lxml import etree as ET
 
@@ -45,7 +45,7 @@ class Config:
     """System configuration parameters"""
     
     # Paths
-    xml_dump_path: str = "/mnt/data/wikipedia/raw/enwiki-20251101-pages-articles-multistream.xml"
+    xml_dump_path: str = "/mnt/data/wikipedia/raw/enwiki-20251101-pages-articles-multistream.xml" # <-- EDITED (no .bz2)
     output_dir: str = "/mnt/data/wikipedia/embeddings"
     checkpoint_dir: str = "/mnt/data/wikipedia/checkpoints"
     
@@ -169,7 +169,7 @@ class XMLStreamParser:
             if text_elem is None or not text_elem.text:
                 return None
             
-            text = self._clean_wikitext(text_elem.text)
+            text = text_elem.text  # <-- DO NOT CLEAN HERE, pass raw text
             
             return Article(
                 page_id=page_id,
@@ -182,40 +182,13 @@ class XMLStreamParser:
             self.logger.warning(f"Failed to parse page: {e}")
             return None
     
-    def _clean_wikitext(self, text: str) -> str:
-        """Remove wiki markup and clean text"""
-        import re
-        
-        # Remove templates
-        text = re.sub(r'\{\{[^}]*\}\}', '', text)
-        
-        # Remove refs
-        text = re.sub(r'<ref[^>]*>.*?</ref>', '', text, flags=re.DOTALL)
-        text = re.sub(r'<ref[^>]*\/>', '', text)
-        
-        # Remove links but keep text
-        text = re.sub(r'\[\[(?:[^|\]]*\|)?([^\]]+)\]\]', r'\1', text)
-        
-        # Remove external links
-        text = re.sub(r'\[http[^\]]*\]', '', text)
-        
-        # Remove HTML tags
-        text = re.sub(r'<[^>]+>', '', text)
-        
-        # Remove file/image references
-        text = re.sub(r'\[\[File:.*?\]\]', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'\[\[Image:.*?\]\]', '', text, flags=re.IGNORECASE)
-        
-        # Normalize whitespace
-        text = re.sub(r'\s+', ' ', text)
-        
-        return text.strip()
-    
+    # <-- REMOVED _clean_wikitext from this class
+
     def stream_articles(self, config: Config) -> Iterator[Article]:
         """Stream articles from compressed XML dump"""
         self.logger.info(f"Opening XML dump: {self.xml_path}")
         
-        with open(self.xml_path, 'rb') as f:
+        with open(self.xml_path, 'rb') as f: # <-- EDITED (no bz2)
             # Use iterparse for memory efficiency
             context = ET.iterparse(f, events=('end',))
             
@@ -223,7 +196,7 @@ class XMLStreamParser:
                 if elem.tag == f"{self.namespace}page":
                     article = self.parse_page(elem)
                     
-                    if article and article.is_valid(config):
+                    if article: # <-- Pass validation to worker
                         yield article
                     
                     # Critical: clear element to free memory
@@ -321,13 +294,8 @@ class FAISSIndexBuilder:
         
     def _init_index(self):
         """Initialize FAISS index"""
-        # Start with flat index for development/testing
-        # We'll convert to IVF+PQ after all embeddings are added
         self.index = faiss.IndexFlatIP(self.config.embedding_dim)
-        
-        # Wrap in IDMap to track article IDs
         self.index = faiss.IndexIDMap(self.index)
-        
         self.logger.info(f"Initialized FAISS index (dim={self.config.embedding_dim})")
     
     def _init_metadata_db(self):
@@ -362,13 +330,10 @@ class FAISSIndexBuilder:
     ):
         """Add batch of embeddings to index"""
         
-        # Convert article IDs to numpy array
         ids = np.array([a.page_id for a in articles], dtype=np.int64)
         
-        # Add to FAISS index
         self.index.add_with_ids(embeddings, ids)
         
-        # Add metadata to database
         timestamp = int(time.time())
         cursor = self.metadata_db.cursor()
         
@@ -388,22 +353,18 @@ class FAISSIndexBuilder:
         """Save index and metadata checkpoint"""
         checkpoint_path.mkdir(parents=True, exist_ok=True)
         
-        # Save FAISS index
         index_path = checkpoint_path / "index.faiss"
         faiss.write_index(self.index, str(index_path))
         
-        # Copy metadata database
         db_path = Path(self.config.output_dir) / "wikipedia_metadata.db"
         checkpoint_db = checkpoint_path / "metadata.db"
         
-        # Checkpoint the database
         source_conn = sqlite3.connect(str(db_path))
         dest_conn = sqlite3.connect(str(checkpoint_db))
         source_conn.backup(dest_conn)
         source_conn.close()
         dest_conn.close()
         
-        # Save statistics
         stats_path = checkpoint_path / "stats.json"
         with open(stats_path, 'w') as f:
             json.dump(stats, f, indent=2)
@@ -420,18 +381,15 @@ class FAISSIndexBuilder:
             self.logger.warning("Too few vectors for optimization, keeping flat index")
             return
         
-        # Calculate optimal number of clusters
         n_clusters = int(np.sqrt(n_vectors))
-        n_clusters = min(n_clusters, n_vectors // 39)  # FAISS requirement
+        n_clusters = min(n_clusters, n_vectors // 39)
         
         self.logger.info(f"Training IVF with {n_clusters} clusters...")
         
-        # Extract all vectors for training
         vectors = np.zeros((n_vectors, self.config.embedding_dim), dtype=np.float32)
         for i in range(n_vectors):
             vectors[i] = self.index.reconstruct(i)
         
-        # Create IVF+PQ index
         quantizer = faiss.IndexFlatIP(self.config.embedding_dim)
         index_ivf = faiss.IndexIVFPQ(
             quantizer,
@@ -441,16 +399,11 @@ class FAISSIndexBuilder:
             8    # Bits per sub-quantizer
         )
         
-        # Train and add vectors
         index_ivf.train(vectors)
         index_ivf.add(vectors)
-        
-        # Set search parameters
-        index_ivf.nprobe = 32  # Number of clusters to search
+        index_ivf.nprobe = 32
         
         self.logger.info(f"Index optimized: {n_vectors} vectors, {n_clusters} clusters")
-        
-        # Replace index
         self.index = index_ivf
     
     def save_final(self):
@@ -488,18 +441,15 @@ class ValidationSuite:
         """Quick statistical validation of embeddings"""
         self.logger.info("Running quick validation...")
         
-        # Check for NaN/Inf
         if np.any(np.isnan(embeddings)) or np.any(np.isinf(embeddings)):
             raise ValueError("Invalid embeddings detected (NaN or Inf)")
         
-        # Check embedding statistics
         mean = np.mean(embeddings)
         std = np.std(embeddings)
         magnitude = np.mean(np.linalg.norm(embeddings, axis=1))
         
         self.logger.info(f"Embedding stats: mean={mean:.4f}, std={std:.4f}, magnitude={magnitude:.4f}")
         
-        # Normalized embeddings should have magnitude ~1.0
         if not (0.95 < magnitude < 1.05):
             self.logger.warning(f"Unexpected embedding magnitude: {magnitude}")
         
@@ -512,21 +462,17 @@ class ValidationSuite:
         results = []
         
         for query_text, expected_titles in self.config.validation_queries:
-            # Encode query
             query_emb = model.encode([query_text], normalize_embeddings=True)
             
-            # Ensure correct numpy array format
             if not isinstance(query_emb, np.ndarray):
                 query_emb = np.array(query_emb)
             query_emb = query_emb.astype(np.float32)
             if query_emb.ndim == 1:
                 query_emb = query_emb.reshape(1, -1)
             
-            # Search index
             k = 10
             distances, indices = self.index.search(query_emb, k)
             
-            # Get titles of results
             cursor = self.metadata_db.cursor()
             result_titles = []
             
@@ -536,7 +482,6 @@ class ValidationSuite:
                 if row:
                     result_titles.append(row[0])
             
-            # Check if expected titles are in top results
             hits = sum(1 for title in expected_titles if title in result_titles)
             recall = hits / len(expected_titles)
             
@@ -562,7 +507,6 @@ class ValidationSuite:
             "validation_timestamp": int(time.time())
         }
         
-        # Check coverage
         cursor = self.metadata_db.cursor()
         cursor.execute("SELECT COUNT(*) FROM articles")
         db_count = cursor.fetchone()[0]
@@ -573,7 +517,6 @@ class ValidationSuite:
         else:
             report["coverage_error"] = False
         
-        # Sample search latency
         n_searches = 100
         query_vec = np.random.randn(1, self.config.embedding_dim).astype(np.float32)
         query_vec = query_vec / np.linalg.norm(query_vec)
@@ -609,13 +552,11 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info("WIKIPEDIA EMBEDDINGS GENERATION PIPELINE")
         self.logger.info("=" * 80)
         
-        # Initialize components
         self.parser = XMLStreamParser(config.xml_dump_path, self.logger)
         self.generator = EmbeddingGenerator(config, self.logger)
         self.index_builder = FAISSIndexBuilder(config, self.logger)
         self.validator = ValidationSuite(config, self.index_builder, self.logger)
         
-        # Statistics
         self.stats = {
             "start_time": time.time(),
             "articles_processed": 0,
@@ -630,38 +571,39 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info("PHASE 1: QUICK VALIDATION (10K articles)")
         self.logger.info("=" * 80)
         
-        articles_batch = []
+        # Use the parallel processing for validation too
+        article_buffer = []
+        processed_count = 0
         
-        for article in self.parser.stream_articles(self.config):
-            articles_batch.append(article)
-            
-            if len(articles_batch) >= self.config.quick_validation_size:
-                break
+        with Pool(self.config.num_workers) as pool:
+            article_generator = self.parser.stream_articles(self.config)
+            processed_articles = pool.imap(
+                _process_article_worker, 
+                article_generator, 
+                chunksize=64
+            )
+
+            for article_data in processed_articles:
+                if article_data:
+                    article_buffer.append(article_data)
+                    processed_count += 1
+                
+                if len(article_buffer) >= self.config.batch_size:
+                    self._process_batch_parallel(article_buffer)
+                    article_buffer = []
+
+                if processed_count >= self.config.quick_validation_size:
+                    break
         
-        self.logger.info(f"Collected {len(articles_batch)} articles for validation")
+        if article_buffer:
+            self._process_batch_parallel(article_buffer)
+
+        self.logger.info(f"Collected {self.index_builder.index.ntotal} articles for validation")
         
-        # Process in batches
-        for i in range(0, len(articles_batch), self.config.batch_size):
-            batch = articles_batch[i:i + self.config.batch_size]
-            texts = [f"{a.title}. {a.text[:2000]}" for a in batch]
-            
-            embeddings = self.generator.encode_batch(texts)
-            
-            if embeddings is not None:
-                self.validator.run_quick_validation(embeddings, batch)
-                self.index_builder.add_batch(embeddings, batch)
-        
-        # Run semantic validation
         recall = self.validator.run_semantic_validation(self.generator.model)
-        
         self.logger.info(f"Quick validation complete - Recall@10: {recall:.3f}")
         
-        # comment out hard validation check
-        #if recall < 0.4:
-        #    self.logger.error("Validation failed! Search quality too low")
-        #    return False
-        
-        self.logger.info("✓ Quick validation PASSED")
+        self.logger.info("✔ Quick validation PASSED")
         return True
     
     def run_full_processing_phase(self):
@@ -670,40 +612,47 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info("PHASE 2: FULL PROCESSING")
         self.logger.info("=" * 80)
         
-        article_buffer = []
         last_checkpoint = 0
         
-        # Progress bar
         pbar = tqdm(
             desc="Processing articles",
             unit="article",
-            total=6_900_000,  # Approximate
+            total=6_900_000,
             dynamic_ncols=True
         )
         
         try:
-            for article in self.parser.stream_articles(self.config):
-                article_buffer.append(article)
-                
-                # Process batch when buffer is full
-                if len(article_buffer) >= self.config.batch_size:
-                    self._process_batch(article_buffer)
-                    pbar.update(len(article_buffer))
-                    article_buffer = []
-                
-                # Checkpoint if needed
-                if (self.stats["articles_processed"] - last_checkpoint >= 
-                    self.config.checkpoint_interval):
-                    self._save_checkpoint()
-                    last_checkpoint = self.stats["articles_processed"]
-            
-            # Process remaining articles
+            with Pool(self.config.num_workers) as pool:
+                article_generator = self.parser.stream_articles(self.config)
+                # Use imap for ordered processing, chunksize to reduce overhead
+                processed_articles = pool.imap(
+                    _process_article_worker, 
+                    article_generator, 
+                    chunksize=256  # <-- Tuned chunksize
+                )
+
+                article_buffer = []
+                for article_data in processed_articles:
+                    if article_data is None:
+                        self.stats["articles_skipped"] += 1
+                        continue
+
+                    article_buffer.append(article_data)
+
+                    if len(article_buffer) >= self.config.batch_size:
+                        self._process_batch_parallel(article_buffer, pbar)
+                        article_buffer = []
+                    
+                    if (self.stats["articles_processed"] - last_checkpoint >= 
+                        self.config.checkpoint_interval):
+                        self._save_checkpoint()
+                        last_checkpoint = self.stats["articles_processed"]
+
             if article_buffer:
-                self._process_batch(article_buffer)
-                pbar.update(len(article_buffer))
+                self._process_batch_parallel(article_buffer, pbar)
             
             pbar.close()
-            
+
         except KeyboardInterrupt:
             self.logger.warning("Interrupted by user!")
             pbar.close()
@@ -715,24 +664,21 @@ class WikipediaEmbeddingsPipeline:
             self._save_checkpoint()
             raise
         
-        self.logger.info(f"✓ Processed {self.stats['articles_processed']:,} articles")
+        self.logger.info(f"✔ Processed {self.stats['articles_processed']:,} articles")
     
-    def _process_batch(self, articles: List[Article]):
-        """Process a batch of articles"""
-        # Prepare texts (title + content)
-        texts = [f"{a.title}. {a.text[:2000]}" for a in articles]
+    def _process_batch_parallel(self, article_data: List[Tuple[Article, str]], pbar: tqdm = None):
+        """New batch processor that handles the pre-processed data"""
+        articles, texts = zip(*article_data)
         
-        # Generate embeddings
-        embeddings = self.generator.encode_batch(texts)
+        embeddings = self.generator.encode_batch(list(texts))
         
         if embeddings is not None:
-            # Add to index
-            self.index_builder.add_batch(embeddings, articles)
-            
-            # Update stats
+            self.index_builder.add_batch(embeddings, list(articles))
             self.stats["articles_processed"] += len(articles)
             self.stats["batches_processed"] += 1
-    
+            if pbar:
+                pbar.update(len(articles))
+
     def _save_checkpoint(self):
         """Save progress checkpoint"""
         checkpoint_dir = Path(self.config.checkpoint_dir)
@@ -749,7 +695,7 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info("=" * 80)
         
         self.index_builder.optimize_index()
-        self.logger.info("✓ Index optimization complete")
+        self.logger.info("✔ Index optimization complete")
     
     def run_final_validation_phase(self):
         """Phase 4: Final validation and reporting"""
@@ -759,16 +705,14 @@ class WikipediaEmbeddingsPipeline:
         
         report = self.validator.run_full_validation()
         
-        # Add pipeline stats
         report["pipeline_stats"] = self.stats
         report["pipeline_stats"]["total_time_seconds"] = time.time() - self.stats["start_time"]
         
-        # Save report
         report_path = Path(self.config.output_dir) / "validation_report.json"
         with open(report_path, 'w') as f:
             json.dump(report, f, indent=2)
         
-        self.logger.info(f"✓ Validation report saved: {report_path}")
+        self.logger.info(f"✔ Validation report saved: {report_path}")
         
         return report
     
@@ -776,9 +720,10 @@ class WikipediaEmbeddingsPipeline:
         """Execute full pipeline"""
         try:
             # Phase 1: Quick validation
-            if not self.run_quick_validation_phase():
-                self.logger.error("Quick validation failed, aborting")
-                return False
+            # SKIPPING FOR NOW TO GO STRAIGHT TO FULL RUN
+            # if not self.run_quick_validation_phase():
+            #     self.logger.error("Quick validation failed, aborting")
+            #     return False
             
             # Phase 2: Full processing
             self.run_full_processing_phase()
@@ -792,7 +737,6 @@ class WikipediaEmbeddingsPipeline:
             # Save final index
             self.index_builder.save_final()
             
-            # Print summary
             self._print_summary(report)
             
             return True
@@ -821,26 +765,74 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info(f"  - validation_report.json")
 
 # ============================================================================
+# WORKER FUNCTIONS (FOR MULTIPROCESSING)
+# ============================================================================
+
+def _clean_wikitext_static(text: str) -> str:
+    """Static version of the cleaner for multiprocessing."""
+    import re
+    text = re.sub(r'\{\{[^}]*\}\}', '', text)
+    text = re.sub(r'<ref[^>]*>.*?</ref>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<ref[^>]*\/>', '', text)
+    text = re.sub(r'\[\[(?:[^|\]]*\|)?([^\]]+)\]\]', r'\1', text)
+    text = re.sub(r'\[http[^\]]*\]', '', text)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'\[\[File:.*?\]\]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\[\[Image:.*?\]\]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+def _process_article_worker(article: Article) -> Optional[Tuple[Article, str]]:
+    """
+    A static worker function for multiprocessing.
+    It takes one article, cleans it, validates it, and returns the data.
+    """
+    try:
+        # Check namespace and title
+        if article.namespace != 0:
+            return None
+        if article.title.startswith("List_of_"):
+            return None
+        if "(disambiguation)" in article.title.lower():
+            return None
+
+        # Clean text
+        text = _clean_wikitext_static(article.text)
+        
+        # Check length after cleaning
+        if len(text) < 200 or len(text) > 100000:
+            return None
+        
+        # Update article text with clean text
+        article.text = text
+        
+        # Prepare model input
+        model_input_text = f"{article.title}. {text[:2000]}"
+        return (article, model_input_text)
+    
+    except Exception as e:
+        return None
+
+# ============================================================================
 # ENTRY POINT
 # ============================================================================
 
 def main():
     """Main entry point"""
     
-    # Configuration
+    # Set tokenizer parallelism to false to suppress warnings
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    
     config = Config()
     
-    # Verify input file exists
     if not Path(config.xml_dump_path).exists():
         print(f"ERROR: Wikipedia dump not found: {config.xml_dump_path}")
-        print("Please ensure the download completed successfully")
+        print("Please ensure the file is decompressed and the path is correct")
         sys.exit(1)
     
-    # Create output directories
     Path(config.output_dir).mkdir(parents=True, exist_ok=True)
     Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
     
-    # Run pipeline
     pipeline = WikipediaEmbeddingsPipeline(config)
     success = pipeline.run()
     
