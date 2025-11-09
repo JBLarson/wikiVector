@@ -752,13 +752,38 @@ class WikipediaEmbeddingsPipeline:
     def _process_batch(self, articles: List[Article], texts: List[str], pbar: tqdm):
         """Process a batch of articles (Consumer side)"""
         
-        embeddings = self.generator.encode_batch(texts)
+        # CRITICAL FIX: Filter out articles that already exist in the database
+        cursor = self.index_builder.metadata_db.cursor()
+        
+        filtered_articles = []
+        filtered_texts = []
+        skipped_count = 0
+        
+        for article, text in zip(articles, texts):
+            cursor.execute("SELECT 1 FROM articles WHERE article_id = ?", (article.page_id,))
+            if cursor.fetchone() is None:
+                # Article doesn't exist - keep it
+                filtered_articles.append(article)
+                filtered_texts.append(text)
+            else:
+                skipped_count += 1
+        
+        if not filtered_articles:
+            self.logger.info(f"Skipped entire batch - all {len(articles)} articles already exist in DB")
+            self.stats["articles_skipped"] += len(articles)
+            return
+        
+        if skipped_count > 0:
+            self.logger.info(f"Batch filter: {len(filtered_articles)} new, {skipped_count} duplicates")
+        
+        # Only encode NEW articles
+        embeddings = self.generator.encode_batch(filtered_texts)
         
         if embeddings is not None:
-            self.index_builder.add_batch(embeddings, articles)
-            self.stats["articles_processed"] += len(articles)
+            self.index_builder.add_batch(embeddings, filtered_articles)
+            self.stats["articles_processed"] += len(filtered_articles)
             self.stats["batches_processed"] += 1
-            pbar.update(len(articles))
+            pbar.update(len(filtered_articles))
 
     def _save_checkpoint(self):
         """Save progress checkpoint"""
