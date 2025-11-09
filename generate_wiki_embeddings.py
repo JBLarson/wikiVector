@@ -285,24 +285,26 @@ def xml_parser_worker(
                     )
                     model_input_text = f"{title}. {text[:2000]}"
                         
-                        # logger.info(f"SUCCESS: Adding '{title}' to queue")
-                        queue.put((article, model_input_text))
-                        put_count += 1
+                    # logger.info(f"SUCCESS: Adding '{title}' to queue")
+                    queue.put((article, model_input_text))
+                    put_count += 1
                     
-                    except Exception as e:
-                        # Log and continue if a single page fails
-                        logger.error(f"Failed to parse a page in {xml_file_path}: {e}")
-                    
-                    finally:
-                        # Critical: clear element to free memory
-                        elem.clear()
-                        while elem.getprevious() is not None:
-                            del elem.getparent()[0]
+                except Exception as e:
+                    # Log and continue if a single page fails
+                    logger.error(f"Failed to parse a page in {xml_file_path}: {e}")
+                
+                finally:
+                    # Critical: clear element to free memory
+                    elem.clear()
+                    while elem.getprevious() is not None:
+                        del elem.getparent()[0]
 
     except Exception as e:
         logger.error(f"WORKER FAILED FATALLY on {xml_file_path}: {e}", exc_info=True)
     finally:
         logger.info(f"Worker finished file. Total pages: {page_count}. Skipped: {skipped_count}. Queued: {put_count}.")
+
+
 
 # ============================================================================
 # EMBEDDING GENERATION - GPU OPTIMIZED
