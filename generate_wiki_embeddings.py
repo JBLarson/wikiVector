@@ -54,7 +54,7 @@ class Config:
     max_seq_length: int = 512
     
     # Performance tuning
-    num_workers: int = 8
+    num_workers: int = 7
     batch_size: int = 512
     checkpoint_interval: int = 100_000
     use_fp16: bool = True
