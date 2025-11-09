@@ -745,7 +745,7 @@ class WikipediaEmbeddingsPipeline:
         
         self.logger.info(f"✔ Processed {self.stats['articles_processed']:,} articles")
 
-a
+
     def _process_batch(self, articles: List[Article], texts: List[str], pbar: tqdm):
         """Process a batch of articles (Consumer side)"""
         
@@ -757,7 +757,7 @@ a
             self.stats["batches_processed"] += 1
             pbar.update(len(articles))
 
-t
+
     def _save_checkpoint(self):
         """Save progress checkpoint"""
         checkpoint_dir = Path(self.config.checkpoint_dir)
@@ -799,7 +799,7 @@ t
             self.run_optimization_phase()
             
             # Phase 4: Final validation
-CH
+
             report = self.run_final_validation_phase()
             
             # Save final index
@@ -819,7 +819,7 @@ CH
         self.logger.info("PIPELINE COMPLETE!")
         self.logger.info("=" * 80)
         total_time = report["pipeline_stats"]["total_time_seconds"]
-s        articles = report["total_articles"]
+        articles = report["total_articles"]
         self.logger.info(f"Total articles: {articles:,}")
         self.logger.info(f"Total time: {total_time/3600:.2f} hours")
         self.logger.info(f"Throughput: {articles/(total_time/60):.0f} articles/min")
@@ -835,7 +835,7 @@ s        articles = report["total_articles"]
 # ============================================================================
 
 def main():
-DELETEME
+
     """Main entry point"""
     
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
