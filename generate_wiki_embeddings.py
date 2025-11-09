@@ -667,15 +667,23 @@ class WikipediaEmbeddingsPipeline:
         articles_already_processed = self.stats["articles_processed"]
         
         if articles_already_processed > 0:
-            chunks_to_skip = articles_already_processed // 10000
+            # BETTER APPROACH: Get all article IDs from database to build a set
+            self.logger.info("Building set of already-processed article IDs from database...")
+            cursor = self.index_builder.metadata_db.cursor()
+            cursor.execute("SELECT article_id FROM articles")
+            processed_ids = set(row[0] for row in cursor.fetchall())
+            self.logger.info(f"Loaded {len(processed_ids):,} article IDs from database")
             
-            self.logger.info(f"RESUMING: Skipping first {chunks_to_skip} chunks (already processed {articles_already_processed:,} articles)")
+            # Store this set for filtering in _process_batch
+            self.processed_ids = processed_ids
             
-            xml_files = xml_files[chunks_to_skip:]
-            
-            self.logger.info(f"Will process {len(xml_files)} remaining chunks")
+            # Don't skip ANY chunks - let filtering handle it
+            # (We'll rely on the article_id check in _process_batch)
+            self.logger.info(f"RESUMING: Will filter {articles_already_processed:,} already-processed articles")
+        else:
+            self.processed_ids = set()
         
-        self.logger.info(f"Found {len(xml_files)} XML chunks to process.")
+        self.logger.info(f"Processing {len(xml_files)} XML chunks")
 
         manager = Manager()
         article_queue = manager.Queue(maxsize=1024)
@@ -749,32 +757,37 @@ class WikipediaEmbeddingsPipeline:
         
         self.logger.info(f"✔ Processed {self.stats['articles_processed']:,} articles")
 
+
+
+
+
+
     def _process_batch(self, articles: List[Article], texts: List[str], pbar: tqdm):
         """Process a batch of articles (Consumer side)"""
         
-        # CRITICAL FIX: Filter out articles that already exist in the database
-        cursor = self.index_builder.metadata_db.cursor()
-        
+        # Use preloaded set instead of DB queries (MUCH faster)
         filtered_articles = []
         filtered_texts = []
         skipped_count = 0
         
         for article, text in zip(articles, texts):
-            cursor.execute("SELECT 1 FROM articles WHERE article_id = ?", (article.page_id,))
-            if cursor.fetchone() is None:
+            if article.page_id not in self.processed_ids:
                 # Article doesn't exist - keep it
                 filtered_articles.append(article)
                 filtered_texts.append(text)
+                # Add to set so we don't reprocess if it appears again
+                self.processed_ids.add(article.page_id)
             else:
                 skipped_count += 1
         
         if not filtered_articles:
-            self.logger.info(f"Skipped entire batch - all {len(articles)} articles already exist in DB")
+            # All articles already exist - don't log every time, too noisy
             self.stats["articles_skipped"] += len(articles)
             return
         
-        if skipped_count > 0:
-            self.logger.info(f"Batch filter: {len(filtered_articles)} new, {skipped_count} duplicates")
+        if skipped_count > 0 and skipped_count < len(articles):
+            # Only log when we have a mix
+            self.logger.info(f"Batch: {len(filtered_articles)} new, {skipped_count} duplicates")
         
         # Only encode NEW articles
         embeddings = self.generator.encode_batch(filtered_texts)
@@ -784,6 +797,8 @@ class WikipediaEmbeddingsPipeline:
             self.stats["articles_processed"] += len(filtered_articles)
             self.stats["batches_processed"] += 1
             pbar.update(len(filtered_articles))
+
+
 
     def _save_checkpoint(self):
         """Save progress checkpoint"""
