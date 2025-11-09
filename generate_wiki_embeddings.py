@@ -153,7 +153,7 @@ def xml_parser_worker(
                     # Extract namespace
                     ns_elem = elem.find(f"{namespace}ns")
                     namespace = int(ns_elem.text) if ns_elem is not None else 0
-                    
+                    ns_value = int(ns_elem.text) if ns_elem is not None else 0
                     # Extract page ID
                     id_elem = elem.find(f"{namespace}id")
                     if id_elem is None:
@@ -174,7 +174,7 @@ def xml_parser_worker(
                         continue
                     
                     # --- Filtering & Cleaning ---
-                    if namespace != 0:
+                    if ns_value != 0:
                         continue
                     if title.startswith("List_of_"):
                         continue
