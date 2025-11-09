@@ -713,7 +713,6 @@ class WikipediaEmbeddingsPipeline:
             return False
 
 
-    
     def run_full_processing_phase(self):
         """Phase 2: Process all articles using Producer-Consumer"""
         self.logger.info("=" * 80)
@@ -721,51 +720,64 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info("=" * 80)
         
         # Get list of all XML chunk files
-        xml_files = sorted(glob(f"{self.config.xml_chunk_dir}/*.xml*")) # Use sorted for deterministic order
+        xml_files = sorted(glob(f"{self.config.xml_chunk_dir}/*.xml*"))
         if not xml_files:
             self.logger.error(f"No XML chunks found in {self.config.xml_chunk_dir}")
             raise FileNotFoundError(f"No XML chunks found in {self.config.xml_chunk_dir}. Run chunk.py first.")
+        
+        # CRITICAL: If resuming from checkpoint, figure out which chunks to skip
+        articles_already_processed = self.stats["articles_processed"]
+        
+        if articles_already_processed > 0:
+            # Each chunk has ~10,000 pages, we processed 3,448,320 articles
+            # So skip approximately the first N chunks
+            chunks_to_skip = articles_already_processed // 10000
             
+            self.logger.info(f"RESUMING: Skipping first {chunks_to_skip} chunks (already processed {articles_already_processed:,} articles)")
+            
+            # Skip those chunks
+            xml_files = xml_files[chunks_to_skip:]
+            
+            self.logger.info(f"Will process {len(xml_files)} remaining chunks")
+        
         self.logger.info(f"Found {len(xml_files)} XML chunks to process.")
 
         # Create a shared queue
         manager = Manager()
-        article_queue = manager.Queue(maxsize=1024) # Max 1024 items in memory
+        article_queue = manager.Queue(maxsize=1024)
 
         # Start producer pool
         producer_pool = Pool(self.config.num_workers)
         
-        # MODIFIED: Pass a worker ID (i) to each worker for logging
         producer_args = [(i, f, article_queue, self.config) for i, f in enumerate(xml_files)]
         
         producer_pool.starmap_async(xml_parser_worker, producer_args)
-        producer_pool.close() # No more tasks will be added
+        producer_pool.close()
         
         self.logger.info(f"Started {self.config.num_workers} producers...")
 
-        # --- This (the main thread) is now the CONSUMER ---
+        # --- Consumer loop ---
         
         pbar = tqdm(
             desc="Processing articles",
             unit="article",
-            total=6_900_000, # Approx
+            total=6_900_000,
+            initial=articles_already_processed,  # START PROGRESS BAR AT CHECKPOINT
             dynamic_ncols=True
         )
         
         article_buffer = []
         texts_buffer = []
-        last_checkpoint = 0
+        last_checkpoint = articles_already_processed  # START FROM CHECKPOINT COUNT
         
         try:
             while True:
                 try:
-                    # Get data from the queue
                     article, model_input_text = article_queue.get(timeout=30)
                     
                     article_buffer.append(article)
                     texts_buffer.append(model_input_text)
                     
-                    # Process batch when buffer is full
                     if len(article_buffer) >= self.config.batch_size:
                         self._process_batch(article_buffer, texts_buffer, pbar)
                         article_buffer, texts_buffer = [], []
@@ -777,14 +789,12 @@ class WikipediaEmbeddingsPipeline:
                         last_checkpoint = self.stats["articles_processed"]
 
                 except Empty:
-                    # If queue is empty, check if producers are done
-                    # This is an internal check, but it's one way to see if the pool is done
-                    if not producer_pool._cache: 
+                    if not producer_pool._cache:
                         self.logger.info("Queue is empty and producers are finished.")
                         break
                     else:
                         self.logger.info("Queue empty, waiting for producers...")
-                        time.sleep(5) # Wait a bit before checking queue again
+                        time.sleep(5)
             
             # Process any remaining articles
             if article_buffer:
