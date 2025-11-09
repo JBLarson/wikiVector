@@ -102,7 +102,43 @@ def setup_logging(config: Config):
     return logging.getLogger(__name__)
 
 # ============================================================================
-# XML PARSING (WORKER)
+# ADD THIS NEW FUNCTION
+# ============================================================================
+# Add this function right above your xml_parser_worker
+
+def get_worker_logger(worker_id: int):
+    """
+    Creates a dedicated logger for a worker process.
+    This is CRITICAL for getting logs out of multiprocessing.
+    """
+    logger = logging.getLogger(f"Worker-{worker_id}")
+    
+    # Check if handlers are already configured (to avoid duplicates)
+    if logger.hasHandlers():
+        return logger
+
+    # Find the file handler from the root logger to log to the same file
+    root_logger = logging.getLogger()
+    file_handler = None
+    for h in root_logger.handlers:
+        if isinstance(h, logging.FileHandler):
+            file_handler = h
+            break
+            
+    if file_handler:
+        # If we found the main log file, add it to our worker logger
+        logger.addHandler(file_handler)
+        logger.setLevel(logging.INFO)
+    else:
+        # Fallback if we can't find it (shouldn't happen)
+        logging.basicConfig(level=logging.INFO)
+        logger.warning(f"Could not find root FileHandler for Worker-{worker_id}")
+
+    return logger
+
+
+# ============================================================================
+# REPLACE YOUR OLD xml_parser_worker WITH THIS
 # ============================================================================
 
 @dataclass
@@ -127,6 +163,7 @@ def _clean_wikitext(text: str) -> str:
     return text.strip()
 
 def xml_parser_worker(
+    worker_id: int,  # We will add this argument
     xml_file_path: str, 
     queue: Queue,
     config: Config
@@ -137,78 +174,121 @@ def xml_parser_worker(
     It takes ONE XML chunk file, parses it, cleans it,
     and puts the results into the shared queue.
     """
+    # 1. SET UP LOGGING FOR THIS WORKER
+    # This is the most important new part
+    logger = get_worker_logger(worker_id)
+    
+    logger.info(f"Worker has started. Processing file: {xml_file_path}")
+    
     try:
         namespace = "{http://www.mediawiki.org/xml/export-0.11/}"
+        page_count = 0
+        skipped_count = 0
         
         with open(xml_file_path, 'rb') as f:
-            context = ET.iterparse(f, events=('end',), tag=f"{namespace}page")            
+            logger.info("File opened. Starting iterparse...")
+            
+            # 2. CORRECT, EFFICIENT PARSING
+            # We add the 'tag' argument to only parse <page> tags
+            context = ET.iterparse(f, events=('end',), tag=f"{namespace}page")
+            
             for event, elem in context:
+                page_count += 1
+                if page_count % 1000 == 0:
+                    logger.info(f"Parsed {page_count} pages so far...")
+                    
                 try:
-                    # Extract title
+                    # --- Extract title ---
                     title_elem = elem.find(f"{namespace}title")
                     if title_elem is None or not title_elem.text:
+                        logger.warning("SKIPPING: Page has no title")
+                        skipped_count += 1
                         continue
                     title = title_elem.text.strip().replace(" ", "_")
-                    
-                    # Extract namespace
+                    # logger.info(f"Found title: {title}") # <-- This is TOO noisy, uncomment if desperate
+
+                    # --- Extract namespace ---
                     ns_elem = elem.find(f"{namespace}ns")
-                    namespace = int(ns_elem.text) if ns_elem is not None else 0
+                    
+                    # 3. CORRECT VARIABLE NAMING
+                    # We use 'ns_value' so it doesn't overwrite the 'namespace' string
                     ns_value = int(ns_elem.text) if ns_elem is not None else 0
-                    # Extract page ID
+                    
+                    # --- Extract page ID ---
                     id_elem = elem.find(f"{namespace}id")
                     if id_elem is None:
+                        logger.warning(f"SKIPPING: Page '{title}' has no ID")
+                        skipped_count += 1
                         continue
-                    page_id = int(id_elem.text)
-                    
-                    # Check for redirect
+        _page = int(id_elem.text)
+                        
+                    # --- Check for redirect ---
                     if elem.find(f"{namespace}redirect") is not None:
+                        # logger.info(f"SKIPPING: Page '{title}' is a redirect")
+                        skipped_count += 1
                         continue
-                    
-                    # Extract text content
+                        
+                    # --- Extract text content ---
                     revision = elem.find(f"{namespace}revision")
                     if revision is None:
-                        continue
-                    
+                        logger.warning(f"SKIPPING: Page '{title}' has no revision")
+                        skipped_count += 1
+              .continue
+                        
                     text_elem = revision.find(f"{namespace}text")
                     if text_elem is None or not text_elem.text:
+                        logger.warning(f"SKIPPING: Page '{title}' has no text")
+                        skipped_count += 1
                         continue
-                    
+                        
                     # --- Filtering & Cleaning ---
                     if ns_value != 0:
+                        # logger.info(f"SKIPPING: Page '{title}' is not in main namespace (ns={ns_value})")
+                        skipped_count += 1
                         continue
                     if title.startswith("List_of_"):
+                        # logger.info(f"SKIPPING: Page '{title}' is a List page")
+                        skipped_count += 1
                         continue
                     if "(disambiguation)" in title.lower():
+                        # logger.info(f"SKIPPING: Page '{title}' is a disambiguation page")
+                        skipped_count += 1
                         continue
 
                     text = _clean_wikitext(text_elem.text)
+                    text_len = len(text)
                     
-                    if len(text) < config.min_article_length or len(text) > config.max_article_length:
+                    if not (config.min_article_length < text_len < config.max_article_length):
+                        # logger.info(f"SKIPPING: Page '{title}' wrong length ({text_len} chars)")
+                        skipped_count += 1
                         continue
-                    
+                        
                     # --- Send to Consumer ---
                     article = Article(
                         page_id=page_id,
                         title=title,
-                        namespace=namespace,
+                        namespace=ns_value,
                         text=text # Store clean text
-                    )
-                    model_input_text = f"{title}. {text[:2000]}"
+                _  )
+                        model_input_text = f"{title}. {text[:2000]}"
+                        
+                        # logger.info(f"SUCCESS: Adding '{title}' to queue")
+                        queue.put((article, model_input_text))
                     
-                    queue.put((article, model_input_text))
-                
-                except Exception as e:
-                    # Log and continue if a single page fails
-                    logging.warning(f"Failed to parse page in {xml_file_path}: {e}")
-                
-                finally:
-                    # Critical: clear element to free memory
-                    elem.clear()
-                    while elem.getprevious() is not None:
-                        del elem.getparent()[0]
+                    except Exception as e:
+                        # Log and continue if a single page fails
+                        logger.error(f"Failed to parse a page in {xml_file_path}: {e}")
+                    
+                    finally:
+                        # Critical: clear element to free memory
+                        elem.clear()
+                        while elem.getprevious() is not None:
+                            del elem.getparent()[0]
 
     except Exception as e:
-        logging.error(f"Worker failed on {xml_file_path}: {e}")
+        logger.error(f"WORKER FAILED FATALLY on {xml_file_path}: {e}", exc_info=True)
+    finally:
+        logger.info(f"Worker finished file. Total pages parsed: {page_count}. Total skipped: {skipped_count}.")
 
 # ============================================================================
 # EMBEDDING GENERATION - GPU OPTIMIZED
