@@ -43,7 +43,6 @@ class Config:
     """System configuration parameters"""
     
     # Paths
-    # This is now the DIRECTORY of split XML files
     xml_chunk_dir: str = "/mnt/data-large/wikipedia/raw/xml_chunks/" 
     output_dir: str = "/mnt/data-large/wikipedia/embeddings"
     checkpoint_dir: str = "/mnt/data-large/wikipedia/checkpoints"
@@ -90,44 +89,33 @@ def setup_logging(config: Config):
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"embeddings_{timestamp}.log"
     
-    # Get the root logger
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     
-    # Remove existing handlers if any
     if logger.hasHandlers():
         logger.handlers.clear()
 
-    # Set format
     formatter = logging.Formatter('%(asctime)s [%(levelname)s] [%(name)s] %(message)s')
     
-    # Create file handler
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     
-    # Create console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     
-    return logging.getLogger(__name__) # Return the main logger
+    return logging.getLogger(__name__)
 
 def get_worker_logger(worker_id: int):
-    """
-    Creates a dedicated logger for a worker process.
-    This is CRITICAL for getting logs out of multiprocessing.
-    """
-    # Create a unique name for the worker logger
+    """Creates a dedicated logger for a worker process"""
     logger = logging.getLogger(f"Worker-{worker_id}")
     
-    # Check if handlers are already configured (to avoid duplicates)
     if logger.hasHandlers():
         return logger
 
-    # Find the file handler from the root logger to log to the same file
     root_logger = logging.getLogger()
     file_handler = None
     for h in root_logger.handlers:
@@ -136,17 +124,12 @@ def get_worker_logger(worker_id: int):
             break
             
     if file_handler:
-        # If we found the main log file, add it to our worker logger
         logger.addHandler(file_handler)
-        logger.setLevel(logging.INFO) # Make sure it logs info messages
+        logger.setLevel(logging.INFO)
     else:
-        # Fallback if we can't find it (shouldn't happen if setup_logging was called)
-        # This will log to console, which is better than nothing
         logging.basicConfig(level=logging.INFO)
         logger.warning(f"Could not find root FileHandler for Worker-{worker_id}. Logging to console.")
 
-    # Prevent logs from propagating up to the root logger's console handler
-    # (which would create duplicates)
     logger.propagate = False
     return logger
 
@@ -160,7 +143,7 @@ class Article:
     page_id: int
     title: str
     namespace: int
-    text: str # This will be the CLEANED text
+    text: str
 
 def _clean_wikitext(text: str) -> str:
     """Static version of the cleaner for multiprocessing."""
@@ -176,18 +159,12 @@ def _clean_wikitext(text: str) -> str:
     return text.strip()
 
 def xml_parser_worker(
-    worker_id: int,  # ADDED: A unique ID for logging
+    worker_id: int,
     xml_file_path: str, 
     queue: Queue,
     config: Config
 ):
-    """
-    This is the producer function.
-    It runs in a separate process.
-    It takes ONE XML chunk file, parses it, cleans it,
-    and puts the results into the shared queue.
-    """
-    # 1. SET UP LOGGING FOR THIS WORKER
+    """Producer function - parses XML chunks"""
     logger = get_worker_logger(worker_id)
     
     logger.info(f"Worker has started. Processing file: {xml_file_path}")
@@ -201,8 +178,6 @@ def xml_parser_worker(
         with open(xml_file_path, 'rb') as f:
             logger.info("File opened. Starting iterparse...")
             
-            # 2. CORRECT, EFFICIENT PARSING
-            # We add the 'tag' argument to only parse <page> tags
             context = ET.iterparse(f, events=('end',), tag=f"{namespace}page")
             
             for event, elem in context:
@@ -211,60 +186,42 @@ def xml_parser_worker(
                     logger.info(f"Parsed {page_count} pages so far... (Skipped: {skipped_count}, Queued: {put_count})")
                     
                 try:
-                    # --- Extract title ---
                     title_elem = elem.find(f"{namespace}title")
                     if title_elem is None or not title_elem.text:
-                        logger.warning("SKIPPING: Page has no title")
                         skipped_count += 1
                         continue
                     title = title_elem.text.strip().replace(" ", "_")
-                    # logger.info(f"Found title: {title}") # <-- This is TOO noisy, uncomment if desperate
 
-                    # --- Extract namespace ---
                     ns_elem = elem.find(f"{namespace}ns")
-                    
-                    # 3. CORRECT VARIABLE NAMING
-                    # We use 'ns_value' so it doesn't overwrite the 'namespace' string
                     ns_value = int(ns_elem.text) if ns_elem is not None else 0
                     
-                    # --- Extract page ID ---
                     id_elem = elem.find(f"{namespace}id")
                     if id_elem is None:
-                        logger.warning(f"SKIPPING: Page '{title}' has no ID")
                         skipped_count += 1
                         continue
                     page_id = int(id_elem.text)
                         
-                    # --- Check for redirect ---
                     if elem.find(f"{namespace}redirect") is not None:
-                        # logger.info(f"SKIPPING: Page '{title}' is a redirect")
                         skipped_count += 1
                         continue
                         
-                    # --- Extract text content ---
                     revision = elem.find(f"{namespace}revision")
                     if revision is None:
-                        logger.warning(f"SKIPPING: Page '{title}' has no revision")
                         skipped_count += 1
                         continue
                         
                     text_elem = revision.find(f"{namespace}text")
                     if text_elem is None or not text_elem.text:
-                        logger.warning(f"SKIPPING: Page '{title}' has no text")
                         skipped_count += 1
                         continue
                         
-                    # --- Filtering & Cleaning ---
                     if ns_value != 0:
-                        # logger.info(f"SKIPPING: Page '{title}' is not in main namespace (ns={ns_value})")
                         skipped_count += 1
                         continue
                     if title.startswith("List_of_"):
-                        # logger.info(f"SKIPPING: Page '{title}' is a List page")
                         skipped_count += 1
                         continue
                     if "(disambiguation)" in title.lower():
-                        # logger.info(f"SKIPPING: Page '{title}' is a disambiguation page")
                         skipped_count += 1
                         continue
 
@@ -272,29 +229,24 @@ def xml_parser_worker(
                     text_len = len(text)
                     
                     if not (config.min_article_length < text_len < config.max_article_length):
-                        # logger.info(f"SKIPPING: Page '{title}' wrong length ({text_len} chars)")
                         skipped_count += 1
                         continue
                         
-                    # --- Send to Consumer ---
                     article = Article(
                         page_id=page_id,
                         title=title,
                         namespace=ns_value,
-                        text=text # Store clean text
+                        text=text
                     )
                     model_input_text = f"{title}. {text[:2000]}"
                         
-                    # logger.info(f"SUCCESS: Adding '{title}' to queue")
                     queue.put((article, model_input_text))
                     put_count += 1
                     
                 except Exception as e:
-                    # Log and continue if a single page fails
                     logger.error(f"Failed to parse a page in {xml_file_path}: {e}")
                 
                 finally:
-                    # Critical: clear element to free memory
                     elem.clear()
                     while elem.getprevious() is not None:
                         del elem.getparent()[0]
@@ -303,8 +255,6 @@ def xml_parser_worker(
         logger.error(f"WORKER FAILED FATALLY on {xml_file_path}: {e}", exc_info=True)
     finally:
         logger.info(f"Worker finished file. Total pages: {page_count}. Skipped: {skipped_count}. Queued: {put_count}.")
-
-
 
 # ============================================================================
 # EMBEDDING GENERATION - GPU OPTIMIZED
@@ -373,14 +323,13 @@ class FAISSIndexBuilder:
         self.logger = logger
         self.index = None
         self.metadata_db = None
-        self._init_index()
         self._init_metadata_db()
         
     def _init_index(self):
-        """Initialize FAISS index"""
+        """Initialize FAISS index - only call if NOT loading from checkpoint"""
         self.index = faiss.IndexFlatIP(self.config.embedding_dim)
         self.index = faiss.IndexIDMap(self.index)
-        self.logger.info(f"Initialized FAISS index (dim={self.config.embedding_dim})")
+        self.logger.info(f"Initialized new FAISS index (dim={self.config.embedding_dim})")
     
     def _init_metadata_db(self):
         """Initialize SQLite database for metadata"""
@@ -479,8 +428,8 @@ class FAISSIndexBuilder:
             quantizer,
             self.config.embedding_dim,
             n_clusters,
-            64,  # Number of sub-quantizers
-            8    # Bits per sub-quantizer
+            64,
+            8
         )
         
         index_ivf.train(vectors)
@@ -636,10 +585,9 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info("WIKIPEDIA EMBEDDINGS GENERATION PIPELINE")
         self.logger.info("=" * 80)
         
-        # NO parser here!
         self.generator = EmbeddingGenerator(config, self.logger)
         self.index_builder = FAISSIndexBuilder(config, self.logger)
-        self.validator = ValidationSuite(config, self.index_builder, self.logger)
+        self.validator = None  # Will be initialized after checkpoint load/create
         
         self.stats = {
             "start_time": time.time(),
@@ -657,19 +605,16 @@ class WikipediaEmbeddingsPipeline:
             self.logger.info("No checkpoint directory found, starting from scratch")
             return False
         
-        # Find all checkpoint directories
         checkpoints = sorted(checkpoint_dir.glob("checkpoint_*"))
         
         if not checkpoints:
             self.logger.info("No checkpoints found, starting from scratch")
             return False
         
-        # Get the latest checkpoint
         latest_checkpoint = checkpoints[-1]
         self.logger.info(f"Found latest checkpoint: {latest_checkpoint.name}")
         
         try:
-            # Load FAISS index
             index_file = latest_checkpoint / "index.faiss"
             if not index_file.exists():
                 self.logger.warning(f"Index file not found in {latest_checkpoint}, skipping")
@@ -678,24 +623,20 @@ class WikipediaEmbeddingsPipeline:
             self.logger.info(f"Loading FAISS index from {index_file}")
             self.index_builder.index = faiss.read_index(str(index_file))
             
-            # Load metadata database
             checkpoint_db = latest_checkpoint / "metadata.db"
             if not checkpoint_db.exists():
                 self.logger.warning(f"Metadata DB not found in {latest_checkpoint}, skipping")
                 return False
             
-            # Copy checkpoint DB to working location
             working_db = Path(self.config.output_dir) / "wikipedia_metadata.db"
             self.logger.info(f"Copying metadata DB from checkpoint")
             
             import shutil
             shutil.copy2(checkpoint_db, working_db)
             
-            # Reconnect metadata DB
             self.index_builder.metadata_db.close()
             self.index_builder.metadata_db = sqlite3.connect(str(working_db))
             
-            # Infer stats from checkpoint name and index
             checkpoint_name = latest_checkpoint.name
             articles_from_name = int(checkpoint_name.split('_')[1])
             
@@ -712,41 +653,33 @@ class WikipediaEmbeddingsPipeline:
             self.logger.error(f"Failed to load checkpoint: {e}", exc_info=True)
             return False
 
-
     def run_full_processing_phase(self):
         """Phase 2: Process all articles using Producer-Consumer"""
         self.logger.info("=" * 80)
         self.logger.info("PHASE 2: FULL PROCESSING (Producer-Consumer)")
         self.logger.info("=" * 80)
         
-        # Get list of all XML chunk files
         xml_files = sorted(glob(f"{self.config.xml_chunk_dir}/*.xml*"))
         if not xml_files:
             self.logger.error(f"No XML chunks found in {self.config.xml_chunk_dir}")
             raise FileNotFoundError(f"No XML chunks found in {self.config.xml_chunk_dir}. Run chunk.py first.")
         
-        # CRITICAL: If resuming from checkpoint, figure out which chunks to skip
         articles_already_processed = self.stats["articles_processed"]
         
         if articles_already_processed > 0:
-            # Each chunk has ~10,000 pages, we processed 3,448,320 articles
-            # So skip approximately the first N chunks
             chunks_to_skip = articles_already_processed // 10000
             
             self.logger.info(f"RESUMING: Skipping first {chunks_to_skip} chunks (already processed {articles_already_processed:,} articles)")
             
-            # Skip those chunks
             xml_files = xml_files[chunks_to_skip:]
             
             self.logger.info(f"Will process {len(xml_files)} remaining chunks")
         
         self.logger.info(f"Found {len(xml_files)} XML chunks to process.")
 
-        # Create a shared queue
         manager = Manager()
         article_queue = manager.Queue(maxsize=1024)
 
-        # Start producer pool
         producer_pool = Pool(self.config.num_workers)
         
         producer_args = [(i, f, article_queue, self.config) for i, f in enumerate(xml_files)]
@@ -756,19 +689,17 @@ class WikipediaEmbeddingsPipeline:
         
         self.logger.info(f"Started {self.config.num_workers} producers...")
 
-        # --- Consumer loop ---
-        
         pbar = tqdm(
             desc="Processing articles",
             unit="article",
             total=6_900_000,
-            initial=articles_already_processed,  # START PROGRESS BAR AT CHECKPOINT
+            initial=articles_already_processed,
             dynamic_ncols=True
         )
         
         article_buffer = []
         texts_buffer = []
-        last_checkpoint = articles_already_processed  # START FROM CHECKPOINT COUNT
+        last_checkpoint = articles_already_processed
         
         try:
             while True:
@@ -782,7 +713,6 @@ class WikipediaEmbeddingsPipeline:
                         self._process_batch(article_buffer, texts_buffer, pbar)
                         article_buffer, texts_buffer = [], []
                     
-                    # Checkpoint if needed
                     if (self.stats["articles_processed"] - last_checkpoint >= 
                         self.config.checkpoint_interval):
                         self._save_checkpoint()
@@ -796,7 +726,6 @@ class WikipediaEmbeddingsPipeline:
                         self.logger.info("Queue empty, waiting for producers...")
                         time.sleep(5)
             
-            # Process any remaining articles
             if article_buffer:
                 self.logger.info(f"Processing final batch of {len(article_buffer)} articles.")
                 self._process_batch(article_buffer, texts_buffer, pbar)
@@ -820,7 +749,6 @@ class WikipediaEmbeddingsPipeline:
         
         self.logger.info(f"✔ Processed {self.stats['articles_processed']:,} articles")
 
-
     def _process_batch(self, articles: List[Article], texts: List[str], pbar: tqdm):
         """Process a batch of articles (Consumer side)"""
         
@@ -832,7 +760,6 @@ class WikipediaEmbeddingsPipeline:
             self.stats["batches_processed"] += 1
             pbar.update(len(articles))
 
-
     def _save_checkpoint(self):
         """Save progress checkpoint"""
         checkpoint_dir = Path(self.config.checkpoint_dir)
@@ -843,7 +770,6 @@ class WikipediaEmbeddingsPipeline:
         self.stats["checkpoints_saved"] += 1
     
     def run_optimization_phase(self):
-        # (Unchanged)
         self.logger.info("=" * 80)
         self.logger.info("PHASE 3: INDEX OPTIMIZATION")
         self.logger.info("=" * 80)
@@ -851,7 +777,6 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info("✔ Index optimization complete")
     
     def run_final_validation_phase(self):
-        # (Unchanged)
         self.logger.info("=" * 80)
         self.logger.info("PHASE 4: FINAL VALIDATION")
         self.logger.info("=" * 80)
@@ -873,6 +798,12 @@ class WikipediaEmbeddingsPipeline:
                 self.logger.info("=" * 80)
                 self.logger.info("RESUMING FROM CHECKPOINT")
                 self.logger.info("=" * 80)
+            else:
+                # No checkpoint - create new index
+                self.index_builder._init_index()
+            
+            # Initialize validator AFTER index is ready (either loaded or created)
+            self.validator = ValidationSuite(self.config, self.index_builder, self.logger)
         
             # Phase 2: Full processing
             self.run_full_processing_phase()
@@ -881,7 +812,6 @@ class WikipediaEmbeddingsPipeline:
             self.run_optimization_phase()
             
             # Phase 4: Final validation
-
             report = self.run_final_validation_phase()
             
             # Save final index
@@ -896,7 +826,6 @@ class WikipediaEmbeddingsPipeline:
             return False
     
     def _print_summary(self, report: dict):
-        # (Unchanged)
         self.logger.info("=" * 80)
         self.logger.info("PIPELINE COMPLETE!")
         self.logger.info("=" * 80)
@@ -917,7 +846,6 @@ class WikipediaEmbeddingsPipeline:
 # ============================================================================
 
 def main():
-
     """Main entry point"""
     
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
