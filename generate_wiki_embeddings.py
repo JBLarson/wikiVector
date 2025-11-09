@@ -649,8 +649,6 @@ class WikipediaEmbeddingsPipeline:
             "checkpoints_saved": 0
         }
 
-    # Add this method to the WikipediaEmbeddingsPipeline class (after __init__, around line 570)
-
     def load_latest_checkpoint(self):
         """Load the most recent checkpoint if it exists"""
         checkpoint_dir = Path(self.config.checkpoint_dir)
@@ -671,15 +669,6 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info(f"Found latest checkpoint: {latest_checkpoint.name}")
         
         try:
-            # Load stats
-            stats_file = latest_checkpoint / "stats.json"
-            if not stats_file.exists():
-                self.logger.warning(f"Stats file not found in {latest_checkpoint}, skipping")
-                return False
-            
-            with open(stats_file, 'r') as f:
-                saved_stats = json.load(f)
-            
             # Load FAISS index
             index_file = latest_checkpoint / "index.faiss"
             if not index_file.exists():
@@ -706,15 +695,15 @@ class WikipediaEmbeddingsPipeline:
             self.index_builder.metadata_db.close()
             self.index_builder.metadata_db = sqlite3.connect(str(working_db))
             
-            # Restore stats
-            self.stats = saved_stats
-            self.stats["start_time"] = time.time()  # Reset start time for current run
+            # Infer stats from checkpoint name and index
+            checkpoint_name = latest_checkpoint.name
+            articles_from_name = int(checkpoint_name.split('_')[1])
             
-            articles_loaded = saved_stats.get("articles_processed", 0)
+            self.stats["articles_processed"] = articles_from_name
+            self.stats["start_time"] = time.time()
+            
             self.logger.info(f"✓ Checkpoint loaded successfully")
-            self.logger.info(f"  Articles processed: {articles_loaded:,}")
-            self.logger.info(f"  Batches processed: {saved_stats.get('batches_processed', 0):,}")
-            self.logger.info(f"  Checkpoints saved: {saved_stats.get('checkpoints_saved', 0)}")
+            self.logger.info(f"  Articles processed: {articles_from_name:,}")
             self.logger.info(f"  FAISS index size: {self.index_builder.index.ntotal:,}")
             
             return True
