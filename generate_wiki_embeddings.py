@@ -808,7 +808,7 @@ class WikipediaEmbeddingsPipeline:
             self._print_summary(report)
             
             return True
-           s
+
         except Exception as e:
             self.logger.error(f"Pipeline failed: {e}", exc_info=True)
             return False
