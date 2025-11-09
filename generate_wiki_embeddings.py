@@ -648,6 +648,82 @@ class WikipediaEmbeddingsPipeline:
             "batches_processed": 0,
             "checkpoints_saved": 0
         }
+
+    # Add this method to the WikipediaEmbeddingsPipeline class (after __init__, around line 570)
+
+    def load_latest_checkpoint(self):
+        """Load the most recent checkpoint if it exists"""
+        checkpoint_dir = Path(self.config.checkpoint_dir)
+        
+        if not checkpoint_dir.exists():
+            self.logger.info("No checkpoint directory found, starting from scratch")
+            return False
+        
+        # Find all checkpoint directories
+        checkpoints = sorted(checkpoint_dir.glob("checkpoint_*"))
+        
+        if not checkpoints:
+            self.logger.info("No checkpoints found, starting from scratch")
+            return False
+        
+        # Get the latest checkpoint
+        latest_checkpoint = checkpoints[-1]
+        self.logger.info(f"Found latest checkpoint: {latest_checkpoint.name}")
+        
+        try:
+            # Load stats
+            stats_file = latest_checkpoint / "stats.json"
+            if not stats_file.exists():
+                self.logger.warning(f"Stats file not found in {latest_checkpoint}, skipping")
+                return False
+            
+            with open(stats_file, 'r') as f:
+                saved_stats = json.load(f)
+            
+            # Load FAISS index
+            index_file = latest_checkpoint / "index.faiss"
+            if not index_file.exists():
+                self.logger.warning(f"Index file not found in {latest_checkpoint}, skipping")
+                return False
+            
+            self.logger.info(f"Loading FAISS index from {index_file}")
+            self.index_builder.index = faiss.read_index(str(index_file))
+            
+            # Load metadata database
+            checkpoint_db = latest_checkpoint / "metadata.db"
+            if not checkpoint_db.exists():
+                self.logger.warning(f"Metadata DB not found in {latest_checkpoint}, skipping")
+                return False
+            
+            # Copy checkpoint DB to working location
+            working_db = Path(self.config.output_dir) / "wikipedia_metadata.db"
+            self.logger.info(f"Copying metadata DB from checkpoint")
+            
+            import shutil
+            shutil.copy2(checkpoint_db, working_db)
+            
+            # Reconnect metadata DB
+            self.index_builder.metadata_db.close()
+            self.index_builder.metadata_db = sqlite3.connect(str(working_db))
+            
+            # Restore stats
+            self.stats = saved_stats
+            self.stats["start_time"] = time.time()  # Reset start time for current run
+            
+            articles_loaded = saved_stats.get("articles_processed", 0)
+            self.logger.info(f"✓ Checkpoint loaded successfully")
+            self.logger.info(f"  Articles processed: {articles_loaded:,}")
+            self.logger.info(f"  Batches processed: {saved_stats.get('batches_processed', 0):,}")
+            self.logger.info(f"  Checkpoints saved: {saved_stats.get('checkpoints_saved', 0)}")
+            self.logger.info(f"  FAISS index size: {self.index_builder.index.ntotal:,}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load checkpoint: {e}", exc_info=True)
+            return False
+
+
     
     def run_full_processing_phase(self):
         """Phase 2: Process all articles using Producer-Consumer"""
@@ -792,6 +868,13 @@ class WikipediaEmbeddingsPipeline:
     def run(self):
         """Execute full pipeline"""
         try:
+            checkpoint_loaded = self.load_latest_checkpoint()
+        
+            if checkpoint_loaded:
+                self.logger.info("=" * 80)
+                self.logger.info("RESUMING FROM CHECKPOINT")
+                self.logger.info("=" * 80)
+        
             # Phase 2: Full processing
             self.run_full_processing_phase()
             
