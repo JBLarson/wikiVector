@@ -90,27 +90,37 @@ def setup_logging(config: Config):
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"embeddings_{timestamp}.log"
     
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+    # Get the root logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
     
-    return logging.getLogger(__name__)
+    # Remove existing handlers if any
+    if logger.hasHandlers():
+        logger.handlers.clear()
 
-# ============================================================================
-# ADD THIS NEW FUNCTION
-# ============================================================================
-# Add this function right above your xml_parser_worker
+    # Set format
+    formatter = logging.Formatter('%(asctime)s [%(levelname)s] [%(name)s] %(message)s')
+    
+    # Create file handler
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    # Create console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    return logging.getLogger(__name__) # Return the main logger
 
 def get_worker_logger(worker_id: int):
     """
     Creates a dedicated logger for a worker process.
     This is CRITICAL for getting logs out of multiprocessing.
     """
+    # Create a unique name for the worker logger
     logger = logging.getLogger(f"Worker-{worker_id}")
     
     # Check if handlers are already configured (to avoid duplicates)
@@ -128,17 +138,20 @@ def get_worker_logger(worker_id: int):
     if file_handler:
         # If we found the main log file, add it to our worker logger
         logger.addHandler(file_handler)
-        logger.setLevel(logging.INFO)
+        logger.setLevel(logging.INFO) # Make sure it logs info messages
     else:
-        # Fallback if we can't find it (shouldn't happen)
+        # Fallback if we can't find it (shouldn't happen if setup_logging was called)
+        # This will log to console, which is better than nothing
         logging.basicConfig(level=logging.INFO)
-        logger.warning(f"Could not find root FileHandler for Worker-{worker_id}")
+        logger.warning(f"Could not find root FileHandler for Worker-{worker_id}. Logging to console.")
 
+    # Prevent logs from propagating up to the root logger's console handler
+    # (which would create duplicates)
+    logger.propagate = False
     return logger
 
-
 # ============================================================================
-# REPLACE YOUR OLD xml_parser_worker WITH THIS
+# XML PARSING (WORKER)
 # ============================================================================
 
 @dataclass
@@ -163,7 +176,7 @@ def _clean_wikitext(text: str) -> str:
     return text.strip()
 
 def xml_parser_worker(
-    worker_id: int,  # We will add this argument
+    worker_id: int,  # ADDED: A unique ID for logging
     xml_file_path: str, 
     queue: Queue,
     config: Config
@@ -175,7 +188,6 @@ def xml_parser_worker(
     and puts the results into the shared queue.
     """
     # 1. SET UP LOGGING FOR THIS WORKER
-    # This is the most important new part
     logger = get_worker_logger(worker_id)
     
     logger.info(f"Worker has started. Processing file: {xml_file_path}")
@@ -184,6 +196,7 @@ def xml_parser_worker(
         namespace = "{http://www.mediawiki.org/xml/export-0.11/}"
         page_count = 0
         skipped_count = 0
+        put_count = 0
         
         with open(xml_file_path, 'rb') as f:
             logger.info("File opened. Starting iterparse...")
@@ -195,7 +208,7 @@ def xml_parser_worker(
             for event, elem in context:
                 page_count += 1
                 if page_count % 1000 == 0:
-                    logger.info(f"Parsed {page_count} pages so far...")
+                    logger.info(f"Parsed {page_count} pages so far... (Skipped: {skipped_count}, Queued: {put_count})")
                     
                 try:
                     # --- Extract title ---
@@ -220,7 +233,7 @@ def xml_parser_worker(
                         logger.warning(f"SKIPPING: Page '{title}' has no ID")
                         skipped_count += 1
                         continue
-        _page = int(id_elem.text)
+                    page_id = int(id_elem.text)
                         
                     # --- Check for redirect ---
                     if elem.find(f"{namespace}redirect") is not None:
@@ -233,7 +246,7 @@ def xml_parser_worker(
                     if revision is None:
                         logger.warning(f"SKIPPING: Page '{title}' has no revision")
                         skipped_count += 1
-              .continue
+                        continue
                         
                     text_elem = revision.find(f"{namespace}text")
                     if text_elem is None or not text_elem.text:
@@ -269,11 +282,12 @@ def xml_parser_worker(
                         title=title,
                         namespace=ns_value,
                         text=text # Store clean text
-                _  )
-                        model_input_text = f"{title}. {text[:2000]}"
+                    )
+                    model_input_text = f"{title}. {text[:2000]}"
                         
                         # logger.info(f"SUCCESS: Adding '{title}' to queue")
                         queue.put((article, model_input_text))
+                        put_count += 1
                     
                     except Exception as e:
                         # Log and continue if a single page fails
@@ -288,7 +302,7 @@ def xml_parser_worker(
     except Exception as e:
         logger.error(f"WORKER FAILED FATALLY on {xml_file_path}: {e}", exc_info=True)
     finally:
-        logger.info(f"Worker finished file. Total pages parsed: {page_count}. Total skipped: {skipped_count}.")
+        logger.info(f"Worker finished file. Total pages: {page_count}. Skipped: {skipped_count}. Queued: {put_count}.")
 
 # ============================================================================
 # EMBEDDING GENERATION - GPU OPTIMIZED
@@ -487,10 +501,6 @@ class FAISSIndexBuilder:
         self.logger.info(f"Final index saved: {index_path}")
         self.logger.info(f"Metadata DB: {output_path / 'wikipedia_metadata.db'}")
 
-
-
-
-
 # ============================================================================
 # VALIDATION
 # ============================================================================
@@ -565,7 +575,7 @@ class ValidationSuite:
         
         if avg_recall < 0.5:
             self.logger.warning("Low recall detected - search quality may be poor")
-        
+s
         return avg_recall
     
     def run_full_validation(self) -> dict:
@@ -610,8 +620,6 @@ class ValidationSuite:
         
         return report
 
-
-
 # ============================================================================
 # MAIN PIPELINE
 # ============================================================================
@@ -639,7 +647,6 @@ class WikipediaEmbeddingsPipeline:
             "checkpoints_saved": 0
         }
     
-
     def run_full_processing_phase(self):
         """Phase 2: Process all articles using Producer-Consumer"""
         self.logger.info("=" * 80)
@@ -647,20 +654,23 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info("=" * 80)
         
         # Get list of all XML chunk files
-        xml_files = glob(f"{self.config.xml_chunk_dir}/*.xml*")
+        xml_files = sorted(glob(f"{self.config.xml_chunk_dir}/*.xml*")) # Use sorted for deterministic order
         if not xml_files:
             self.logger.error(f"No XML chunks found in {self.config.xml_chunk_dir}")
-            raise FileNotFoundError("Run the xml_split command first")
+            raise FileNotFoundError(f"No XML chunks found in {self.config.xml_chunk_dir}. Run chunk.py first.")
             
         self.logger.info(f"Found {len(xml_files)} XML chunks to process.")
 
         # Create a shared queue
         manager = Manager()
-        article_queue = manager.Queue(maxsize=1024) # Max 1024 batches in memory
+        article_queue = manager.Queue(maxsize=1024) # Max 1024 items in memory
 
         # Start producer pool
         producer_pool = Pool(self.config.num_workers)
-        producer_args = [(f, article_queue, self.config) for f in xml_files]
+        
+        # MODIFIED: Pass a worker ID (i) to each worker for logging
+        producer_args = [(i, f, article_queue, self.config) for i, f in enumerate(xml_files)]
+        
         producer_pool.starmap_async(xml_parser_worker, producer_args)
         producer_pool.close() # No more tasks will be added
         
@@ -701,15 +711,17 @@ class WikipediaEmbeddingsPipeline:
 
                 except Empty:
                     # If queue is empty, check if producers are done
-                    if not producer_pool._cache: # Undocumented, but checks if pool is done
+                    # This is an internal check, but it's one way to see if the pool is done
+                    if not producer_pool._cache: 
                         self.logger.info("Queue is empty and producers are finished.")
                         break
                     else:
                         self.logger.info("Queue empty, waiting for producers...")
-                        time.sleep(5)
+                        time.sleep(5) # Wait a bit before checking queue again
             
             # Process any remaining articles
             if article_buffer:
+                self.logger.info(f"Processing final batch of {len(article_buffer)} articles.")
                 self._process_batch(article_buffer, texts_buffer, pbar)
             
             pbar.close()
@@ -731,6 +743,7 @@ class WikipediaEmbeddingsPipeline:
         
         self.logger.info(f"✔ Processed {self.stats['articles_processed']:,} articles")
 
+a
     def _process_batch(self, articles: List[Article], texts: List[str], pbar: tqdm):
         """Process a batch of articles (Consumer side)"""
         
@@ -742,6 +755,7 @@ class WikipediaEmbeddingsPipeline:
             self.stats["batches_processed"] += 1
             pbar.update(len(articles))
 
+t
     def _save_checkpoint(self):
         """Save progress checkpoint"""
         checkpoint_dir = Path(self.config.checkpoint_dir)
@@ -783,6 +797,7 @@ class WikipediaEmbeddingsPipeline:
             self.run_optimization_phase()
             
             # Phase 4: Final validation
+CH
             report = self.run_final_validation_phase()
             
             # Save final index
@@ -791,7 +806,7 @@ class WikipediaEmbeddingsPipeline:
             self._print_summary(report)
             
             return True
-            
+           s
         except Exception as e:
             self.logger.error(f"Pipeline failed: {e}", exc_info=True)
             return False
@@ -802,7 +817,7 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info("PIPELINE COMPLETE!")
         self.logger.info("=" * 80)
         total_time = report["pipeline_stats"]["total_time_seconds"]
-        articles = report["total_articles"]
+s        articles = report["total_articles"]
         self.logger.info(f"Total articles: {articles:,}")
         self.logger.info(f"Total time: {total_time/3600:.2f} hours")
         self.logger.info(f"Throughput: {articles/(total_time/60):.0f} articles/min")
@@ -818,6 +833,7 @@ class WikipediaEmbeddingsPipeline:
 # ============================================================================
 
 def main():
+DELETEME
     """Main entry point"""
     
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -826,7 +842,7 @@ def main():
     
     if not Path(config.xml_chunk_dir).exists():
         print(f"ERROR: Wikipedia chunk dir not found: {config.xml_chunk_dir}")
-        print("Please ensure the xml_split command has been run")
+        print("Please ensure the chunk.py script has been run")
         sys.exit(1)
     
     Path(config.output_dir).mkdir(parents=True, exist_ok=True)
