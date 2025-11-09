@@ -44,9 +44,9 @@ class Config:
     
     # Paths
     # This is now the DIRECTORY of split XML files
-    xml_chunk_dir: str = "/mnt/data/wikipedia/raw/xml_chunks/" 
-    output_dir: str = "/mnt/data/wikipedia/embeddings"
-    checkpoint_dir: str = "/mnt/data/wikipedia/checkpoints"
+    xml_chunk_dir: str = "/mnt/data-large/wikipedia/raw/xml_chunks/" 
+    output_dir: str = "/mnt/data-large/wikipedia/embeddings"
+    checkpoint_dir: str = "/mnt/data-large/wikipedia/checkpoints"
     
     # Model configuration
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
