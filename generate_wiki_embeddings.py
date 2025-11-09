@@ -422,7 +422,7 @@ class FAISSIndexBuilder:
         cursor = self.metadata_db.cursor()
         
         cursor.executemany(
-            """INSERT OR REPLACE INTO articles 
+            """INSERT OR IGNORE INTO articles 
                (idx, article_id, title, namespace, char_count, embedding_timestamp)
                VALUES (?, ?, ?, ?, ?, ?)""",
             [
