@@ -141,8 +141,7 @@ def xml_parser_worker(
         namespace = "{http://www.mediawiki.org/xml/export-0.11/}"
         
         with open(xml_file_path, 'rb') as f:
-            context = ET.iterparse(f, events=('end',))
-            
+            context = ET.iterparse(f, events=('end',), tag=f"{namespace}page")            
             for event, elem in context:
                 if elem.tag == f"{namespace}page":
                     try:
