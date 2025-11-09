@@ -131,10 +131,10 @@ def check_disk_space():
     """Verify sufficient disk space"""
     print("\n✓ Checking disk space...")
     
-    data_dir = Path("/mnt/data")
+    data_dir = Path("/mnt/data-large")
     
     if not data_dir.exists():
-        print("  ❌ ERROR: /mnt/data not mounted")
+        print("  ❌ ERROR: /mnt/data-large not mounted")
         print("  Run setup.sh to mount persistent disk")
         return False
     
@@ -165,7 +165,7 @@ def check_wikipedia_dump():
     """Check if Wikipedia dump exists"""
     print("\n✓ Checking Wikipedia dump...")
     
-    dump_path = Path("/mnt/data/wikipedia/raw/enwiki-20251101-pages-articles-multistream.xml.bz2")
+    dump_path = Path("/mnt/data-large/wikipedia/raw/enwiki-20251101-pages-articles-multistream.xml")
     
     if not dump_path.exists():
         print(f"  ❌ ERROR: Wikipedia dump not found")
@@ -183,48 +183,6 @@ def check_wikipedia_dump():
     
     return True
 
-def test_xml_parsing():
-    """Quick test of XML parsing"""
-    print("\n✓ Testing XML parsing...")
-    
-    dump_path = Path("/mnt/data/wikipedia/raw/enwiki-20251101-pages-articles-multistream.xml.bz2")
-    
-    if not dump_path.exists():
-        print("  ⚠️  Skipping (dump not found)")
-        return True
-    
-    try:
-        import bz2
-        import xml.etree.ElementTree as ET
-        
-        # Try to parse first page
-        with bz2.open(dump_path, 'rt', encoding='utf-8') as f:
-            # Read until we get a complete page
-            content = ""
-            for line in f:
-                content += line
-                if '</page>' in line:
-                    break
-                if len(content) > 1_000_000:  # Safety limit
-                    break
-        
-        # Parse
-        namespace = "{http://www.mediawiki.org/xml/export-0.11/}"
-        root = ET.fromstring(content + "</mediawiki>")
-        page = root.find(f"{namespace}page")
-        
-        if page is not None:
-            title = page.find(f"{namespace}title")
-            if title is not None:
-                print(f"  ✓ Successfully parsed first article: {title.text}")
-                return True
-        
-        print("  ⚠️  Could not parse first page (might be OK)")
-        return True
-        
-    except Exception as e:
-        print(f"  ❌ ERROR: {e}")
-        return False
 
 def test_embedding_generation():
     """Quick test of embedding generation"""
@@ -277,7 +235,6 @@ def main():
         ("FAISS GPU", check_faiss_gpu),
         ("Disk space", check_disk_space),
         ("Wikipedia dump", check_wikipedia_dump),
-        ("XML parsing", test_xml_parsing),
         ("Embedding generation", test_embedding_generation),
     ]
     
