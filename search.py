@@ -14,7 +14,7 @@ from sentence_transformers import SentenceTransformer
 
 # --- Configuration ---
 DB_PATH = "/mnt/data-large/wikipedia/embeddings/wikipedia_metadata.db"
-INDEX_PATH = "/mnt/data-large/wikipedia/embeddings/wikipedia_embeddings.faiss"
+INDEX_PATH = "/mnt/data-large/wikipedia/checkpoints/checkpoint_02100000/index.faiss"
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 TOP_K = 5 # Number of results to return
 # ---------------------
