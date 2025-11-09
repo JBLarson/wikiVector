@@ -577,7 +577,7 @@ class ValidationSuite:
         
         if avg_recall < 0.5:
             self.logger.warning("Low recall detected - search quality may be poor")
-s
+
         return avg_recall
     
     def run_full_validation(self) -> dict:
