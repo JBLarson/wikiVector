@@ -143,70 +143,69 @@ def xml_parser_worker(
         with open(xml_file_path, 'rb') as f:
             context = ET.iterparse(f, events=('end',), tag=f"{namespace}page")            
             for event, elem in context:
-                if elem.tag == f"{namespace}page":
-                    try:
-                        # Extract title
-                        title_elem = elem.find(f"{namespace}title")
-                        if title_elem is None or not title_elem.text:
-                            continue
-                        title = title_elem.text.strip().replace(" ", "_")
-                        
-                        # Extract namespace
-                        ns_elem = elem.find(f"{namespace}ns")
-                        namespace = int(ns_elem.text) if ns_elem is not None else 0
-                        
-                        # Extract page ID
-                        id_elem = elem.find(f"{namespace}id")
-                        if id_elem is None:
-                            continue
-                        page_id = int(id_elem.text)
-                        
-                        # Check for redirect
-                        if elem.find(f"{namespace}redirect") is not None:
-                            continue
-                        
-                        # Extract text content
-                        revision = elem.find(f"{namespace}revision")
-                        if revision is None:
-                            continue
-                        
-                        text_elem = revision.find(f"{namespace}text")
-                        if text_elem is None or not text_elem.text:
-                            continue
-                        
-                        # --- Filtering & Cleaning ---
-                        if namespace != 0:
-                            continue
-                        if title.startswith("List_of_"):
-                            continue
-                        if "(disambiguation)" in title.lower():
-                            continue
+                try:
+                    # Extract title
+                    title_elem = elem.find(f"{namespace}title")
+                    if title_elem is None or not title_elem.text:
+                        continue
+                    title = title_elem.text.strip().replace(" ", "_")
+                    
+                    # Extract namespace
+                    ns_elem = elem.find(f"{namespace}ns")
+                    namespace = int(ns_elem.text) if ns_elem is not None else 0
+                    
+                    # Extract page ID
+                    id_elem = elem.find(f"{namespace}id")
+                    if id_elem is None:
+                        continue
+                    page_id = int(id_elem.text)
+                    
+                    # Check for redirect
+                    if elem.find(f"{namespace}redirect") is not None:
+                        continue
+                    
+                    # Extract text content
+                    revision = elem.find(f"{namespace}revision")
+                    if revision is None:
+                        continue
+                    
+                    text_elem = revision.find(f"{namespace}text")
+                    if text_elem is None or not text_elem.text:
+                        continue
+                    
+                    # --- Filtering & Cleaning ---
+                    if namespace != 0:
+                        continue
+                    if title.startswith("List_of_"):
+                        continue
+                    if "(disambiguation)" in title.lower():
+                        continue
 
-                        text = _clean_wikitext(text_elem.text)
-                        
-                        if len(text) < config.min_article_length or len(text) > config.max_article_length:
-                            continue
-                        
-                        # --- Send to Consumer ---
-                        article = Article(
-                            page_id=page_id,
-                            title=title,
-                            namespace=namespace,
-                            text=text # Store clean text
-                        )
-                        model_input_text = f"{title}. {text[:2000]}"
-                        
-                        queue.put((article, model_input_text))
+                    text = _clean_wikitext(text_elem.text)
                     
-                    except Exception as e:
-                        # Log and continue if a single page fails
-                        logging.warning(f"Failed to parse page in {xml_file_path}: {e}")
+                    if len(text) < config.min_article_length or len(text) > config.max_article_length:
+                        continue
                     
-                    finally:
-                        # Critical: clear element to free memory
-                        elem.clear()
-                        while elem.getprevious() is not None:
-                            del elem.getparent()[0]
+                    # --- Send to Consumer ---
+                    article = Article(
+                        page_id=page_id,
+                        title=title,
+                        namespace=namespace,
+                        text=text # Store clean text
+                    )
+                    model_input_text = f"{title}. {text[:2000]}"
+                    
+                    queue.put((article, model_input_text))
+                
+                except Exception as e:
+                    # Log and continue if a single page fails
+                    logging.warning(f"Failed to parse page in {xml_file_path}: {e}")
+                
+                finally:
+                    # Critical: clear element to free memory
+                    elem.clear()
+                    while elem.getprevious() is not None:
+                        del elem.getparent()[0]
 
     except Exception as e:
         logging.error(f"Worker failed on {xml_file_path}: {e}")
