@@ -1,6 +1,5 @@
-# Create .gitignore before git add
-cat > .gitignore << 'EOF'
-# Data files
+data
+
 /mnt/data/
 *.xml
 *.bz2

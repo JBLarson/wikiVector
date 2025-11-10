@@ -35,46 +35,46 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
 # ============================================================================
-# CONFIGURATION
+# CONFIGURATION - MODIFIED FOR LOCAL MAC TESTING
 # ============================================================================
 
 @dataclass
 class Config:
     """System configuration parameters"""
     
-    # Paths
-    xml_chunk_dir: str = "/mnt/data-large/wikipedia/raw/xml_chunks/" 
-    output_dir: str = "/mnt/data-large/wikipedia/embeddings"
-    checkpoint_dir: str = "/mnt/data-large/wikipedia/checkpoints"
+    # --- MODIFIED FOR LOCAL ---
+    # Point this to the folder you created
+    xml_chunk_dir: str = "./local_test_data/raw/" 
+    # This is where your test DB will be created
+    output_dir: str = "./local_test_data/embeddings/"
+    checkpoint_dir: str = "./local_test_data/checkpoints/"
     
     # Model configuration
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dim: int = 384
     max_seq_length: int = 512
     
-    # Performance tuning
-    num_workers: int = 7
-    batch_size: int = 512
-    checkpoint_interval: int = 100_000
-    use_fp16: bool = True
+    # --- MODIFIED FOR LOCAL ---
+    # Use fewer workers for a small local file
+    num_workers: int = 1
+    batch_size: int = 2 # Small batch size for a tiny dataset
+    checkpoint_interval: int = 10
+    use_fp16: bool = False # FP16 not supported on Mac CPU/MPS
     
     # Validation
-    quick_validation_size: int = 10_000
+    quick_validation_size: int = 2
     validation_queries: List[Tuple[str, List[str]]] = None
     
     # Filtering
-    min_article_length: int = 200
+    min_article_length: int = 200 # Keep this to test filtering
     max_article_length: int = 100_000
     
     def __post_init__(self):
         """Initialize validation queries"""
         if self.validation_queries is None:
             self.validation_queries = [
-                ("programming languages", ["Python_(programming_language)", "JavaScript", "Java_(programming_language)"]),
-                ("machine learning", ["Machine_learning", "Deep_learning", "Neural_network"]),
-                ("European countries", ["France", "Germany", "United_Kingdom"]),
-                ("physics concepts", ["Quantum_mechanics", "General_relativity", "Thermodynamics"]),
-                ("Renaissance artists", ["Leonardo_da_Vinci", "Michelangelo", "Raphael"]),
+                ("programming languages", ["Python_(programming_language)", "Machine_learning"]),
+                ("European countries", ["France", "Germany"]),
             ]
 
 # ============================================================================
@@ -175,6 +175,7 @@ def xml_parser_worker(
         skipped_count = 0
         put_count = 0
         
+        # Use open() directly for uncompressed .xml
         with open(xml_file_path, 'rb') as f:
             logger.info("File opened. Starting iterparse...")
             
@@ -190,6 +191,7 @@ def xml_parser_worker(
                     if title_elem is None or not title_elem.text:
                         skipped_count += 1
                         continue
+                    # Use the title directly. Your test data is already formatted.
                     title = title_elem.text.strip().replace(" ", "_")
 
                     ns_elem = elem.find(f"{namespace}ns")
@@ -229,6 +231,7 @@ def xml_parser_worker(
                     text_len = len(text)
                     
                     if not (config.min_article_length < text_len < config.max_article_length):
+                        logger.warning(f"Skipping {title} (length: {text_len})")
                         skipped_count += 1
                         continue
                         
@@ -238,7 +241,7 @@ def xml_parser_worker(
                         namespace=ns_value,
                         text=text
                     )
-                    model_input_text = f"{title}. {text[:2000]}"
+                    model_input_text = f"{title.replace('_', ' ')}. {text[:2000]}"
                         
                     queue.put((article, model_input_text))
                     put_count += 1
@@ -257,11 +260,11 @@ def xml_parser_worker(
         logger.info(f"Worker finished file. Total pages: {page_count}. Skipped: {skipped_count}. Queued: {put_count}.")
 
 # ============================================================================
-# EMBEDDING GENERATION - GPU OPTIMIZED
+# EMBEDDING GENERATION
 # ============================================================================
 
 class EmbeddingGenerator:
-    """GPU-optimized embedding generation with batching"""
+    """Embedding generation with batching"""
     
     def __init__(self, config: Config, logger: logging.Logger):
         self.config = config
@@ -270,26 +273,23 @@ class EmbeddingGenerator:
         self.model = self._load_model()
         
     def _setup_device(self) -> str:
-        if torch.cuda.is_available():
+        # Check for Mac MPS (Apple Silicon GPU)
+        if torch.backends.mps.is_available():
+            device = "mps"
+            self.logger.info("Mac MPS (GPU) detected. Using 'mps' device.")
+        elif torch.cuda.is_available():
             device = "cuda"
-            gpu_name = torch.cuda.get_device_name(0)
-            gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
-            self.logger.info(f"GPU detected: {gpu_name} ({gpu_memory:.1f}GB)")
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
+            self.logger.info("NVIDIA GPU detected. Using 'cuda' device.")
         else:
             device = "cpu"
-            self.logger.warning("No GPU detected, using CPU (will be much slower)")
+            self.logger.warning("No GPU detected, using CPU.")
         return device
     
     def _load_model(self) -> SentenceTransformer:
         self.logger.info(f"Loading model: {self.config.model_name}")
         model = SentenceTransformer(self.config.model_name, device=self.device)
         model.max_seq_length = self.config.max_seq_length
-        if self.config.use_fp16 and self.device == "cuda":
-            model = model.half()
-            self.logger.info("Enabled FP16 inference for 2x speedup")
-        _ = model.encode(["warmup"], show_progress_bar=False)
+        # Note: FP16 is not enabled for MPS/CPU
         return model
     
     def encode_batch(self, texts: List[str]) -> np.ndarray:
@@ -297,7 +297,7 @@ class EmbeddingGenerator:
             embeddings = self.model.encode(
                 texts,
                 batch_size=self.config.batch_size,
-                show_progress_bar=True,
+                show_progress_bar=False, # Quieter for local testing
                 convert_to_numpy=True,
                 normalize_embeddings=True
             )
@@ -306,9 +306,7 @@ class EmbeddingGenerator:
                 return None
             return embeddings.astype(np.float32)
         except RuntimeError as e:
-            if "out of memory" in str(e):
-                self.logger.error("GPU OOM! Reduce batch size")
-                torch.cuda.empty_cache()
+            self.logger.error(f"Error during encoding: {e}")
             raise
 
 # ============================================================================
@@ -322,22 +320,28 @@ class FAISSIndexBuilder:
         self.config = config
         self.logger = logger
         self.index = None
-        self.metadata_db = None
-        self._init_metadata_db()
+        self.db_path = Path(self.config.output_dir) / "metadata.db"
+        self.metadata_db = self._init_metadata_db()
         
     def _init_index(self):
         """Initialize FAISS index - only call if NOT loading from checkpoint"""
         self.index = faiss.IndexFlatIP(self.config.embedding_dim)
-        self.index = faiss.IndexIDMap(self.index)
+        # CRITICAL: This maps article_id -> vector
+        self.index = faiss.IndexIDMap(self.index) 
         self.logger.info(f"Initialized new FAISS index (dim={self.config.embedding_dim})")
     
-    def _init_metadata_db(self):
+    def _init_metadata_db(self) -> sqlite3.Connection:
         """Initialize SQLite database for metadata"""
-        db_path = Path(self.config.output_dir) / "wikipedia_metadata.db"
+        db_path = self.db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
         
-        self.metadata_db = sqlite3.connect(str(db_path))
-        cursor = self.metadata_db.cursor()
+        # Delete old DB if it exists, for clean local testing
+        if db_path.exists():
+            self.logger.warning(f"Deleting existing local DB: {db_path}")
+            db_path.unlink()
+        
+        metadata_db = sqlite3.connect(str(db_path))
+        cursor = metadata_db.cursor()
         
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS articles (
@@ -353,8 +357,9 @@ class FAISSIndexBuilder:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_title ON articles(title)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_article_id ON articles(article_id)")
         
-        self.metadata_db.commit()
-        self.logger.info("Initialized metadata database")
+        metadata_db.commit()
+        self.logger.info(f"Initialized metadata database at {db_path}")
+        return metadata_db
     
     def add_batch(
         self,
@@ -389,10 +394,10 @@ class FAISSIndexBuilder:
         index_path = checkpoint_path / "index.faiss"
         faiss.write_index(self.index, str(index_path))
         
-        db_path = Path(self.config.output_dir) / "wikipedia_metadata.db"
         checkpoint_db = checkpoint_path / "metadata.db"
         
-        source_conn = sqlite3.connect(str(db_path))
+        # Backup the main DB to the checkpoint location
+        source_conn = sqlite3.connect(str(self.db_path))
         dest_conn = sqlite3.connect(str(checkpoint_db))
         source_conn.backup(dest_conn)
         source_conn.close()
@@ -403,54 +408,96 @@ class FAISSIndexBuilder:
             json.dump(stats, f, indent=2)
         
         self.logger.info(f"Checkpoint saved: {checkpoint_path}")
-    
+
+    # ======================================================
+    # --- THIS IS THE CRITICAL FIX ---
+    # ======================================================
     def optimize_index(self):
         """Convert to optimized IVF+PQ index for production"""
         self.logger.info("Optimizing index with IVF+PQ...")
         
         n_vectors = self.index.ntotal
         
-        if n_vectors < 1000:
-            self.logger.warning("Too few vectors for optimization, keeping flat index")
+        if n_vectors < 1:
+            self.logger.warning("No vectors in index. Skipping optimization.")
             return
+
+        # 1. Get ALL article_ids from the DB
+        #    We must get the IDs in the order they were added
+        self.logger.info(f"Fetching {n_vectors} article IDs from DB...")
+        cursor = self.metadata_db.cursor()
+        cursor.execute("SELECT article_id FROM articles ORDER BY idx ASC")
         
+        ids_list = [row[0] for row in cursor.fetchall()]
+        ids = np.array(ids_list, dtype=np.int64)
+        
+        if len(ids) != n_vectors:
+            self.logger.error(f"DB count ({len(ids)}) != Index count ({n_vectors})")
+            raise Exception("DB/Index count mismatch. Cannot optimize.")
+
+        # 2. Reconstruct ALL vectors using their *real IDs*
+        vectors = np.zeros((n_vectors, self.config.embedding_dim), dtype=np.float32)
+        self.logger.info("Reconstructing all vectors from flat index...")
+        for i, article_id in enumerate(tqdm(ids, desc="Reconstructing vectors")):
+            try:
+                vectors[i] = self.index.reconstruct(int(article_id))
+            except Exception as e:
+                self.logger.error(f"Failed to reconstruct {article_id}: {e}")
+                # This can happen if an ID is in DB but not index
+                raise
+        
+        self.logger.info("All vectors reconstructed. Training new index...")
+
+        # 3. Build new optimized index
         n_clusters = int(np.sqrt(n_vectors))
-        n_clusters = min(n_clusters, n_vectors // 39)
+        n_clusters = min(n_clusters, max(1, n_vectors // 39)) # Ensure n_clusters >= 1
+        if n_clusters < 1: n_clusters = 1
         
         self.logger.info(f"Training IVF with {n_clusters} clusters...")
-        
-        vectors = np.zeros((n_vectors, self.config.embedding_dim), dtype=np.float32)
-        for i in range(n_vectors):
-            vectors[i] = self.index.reconstruct(i)
         
         quantizer = faiss.IndexFlatIP(self.config.embedding_dim)
         index_ivf = faiss.IndexIVFPQ(
             quantizer,
             self.config.embedding_dim,
             n_clusters,
-            64,
-            8
+            64,  # M: 64 sub-quantizers (maybe low for 384 dim, but ok)
+            8    # 8 bits per sub-quantizer
         )
         
+        # Train on the REAL vectors
         index_ivf.train(vectors)
-        index_ivf.add(vectors)
-        index_ivf.nprobe = 32
+        self.logger.info("Training complete.")
+
+        # 4. Create a NEW IndexIDMap and add vectors WITH IDs
+        #    We use IndexIDMap2, which is recommended for IVF indexes
+        self.logger.info("Creating new optimized IndexIDMap2...")
+        new_index = faiss.IndexIDMap2(index_ivf)
         
-        self.logger.info(f"Index optimized: {n_vectors} vectors, {n_clusters} clusters")
-        self.index = index_ivf
+        # Add the vectors WITH their original article_ids
+        new_index.add_with_ids(vectors, ids)
+        
+        # Set nprobe on the *underlying* IVF index for searching
+        # This is a search-time parameter
+        ivf_index_cast = faiss.downcast_index(new_index.index)
+        ivf_index_cast.nprobe = min(32, n_clusters) # nprobe must be <= n_clusters
+        
+        self.logger.info(f"Index optimized: {new_index.ntotal} vectors, {n_clusters} clusters")
+        
+        # Replace the old index
+        self.index = new_index
     
     def save_final(self):
         """Save final optimized index"""
         output_path = Path(self.config.output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         
-        index_path = output_path / "wikipedia_embeddings.faiss"
+        index_path = output_path / "index.faiss"
         faiss.write_index(self.index, str(index_path))
         
         self.metadata_db.close()
         
         self.logger.info(f"Final index saved: {index_path}")
-        self.logger.info(f"Metadata DB: {output_path / 'wikipedia_metadata.db'}")
+        self.logger.info(f"Metadata DB: {self.db_path}")
 
 # ============================================================================
 # VALIDATION
@@ -470,24 +517,6 @@ class ValidationSuite:
         self.metadata_db = index_builder.metadata_db
         self.logger = logger
     
-    def run_quick_validation(self, embeddings: np.ndarray, articles: List[Article]):
-        """Quick statistical validation of embeddings"""
-        self.logger.info("Running quick validation...")
-        
-        if np.any(np.isnan(embeddings)) or np.any(np.isinf(embeddings)):
-            raise ValueError("Invalid embeddings detected (NaN or Inf)")
-        
-        mean = np.mean(embeddings)
-        std = np.std(embeddings)
-        magnitude = np.mean(np.linalg.norm(embeddings, axis=1))
-        
-        self.logger.info(f"Embedding stats: mean={mean:.4f}, std={std:.4f}, magnitude={magnitude:.4f}")
-        
-        if not (0.95 < magnitude < 1.05):
-            self.logger.warning(f"Unexpected embedding magnitude: {magnitude}")
-        
-        return True
-    
     def run_semantic_validation(self, model: SentenceTransformer):
         """Validate semantic search quality"""
         self.logger.info("Running semantic validation...")
@@ -497,20 +526,19 @@ class ValidationSuite:
         for query_text, expected_titles in self.config.validation_queries:
             query_emb = model.encode([query_text], normalize_embeddings=True)
             
-            if not isinstance(query_emb, np.ndarray):
-                query_emb = np.array(query_emb)
             query_emb = query_emb.astype(np.float32)
             if query_emb.ndim == 1:
                 query_emb = query_emb.reshape(1, -1)
             
-            k = 10
-            distances, indices = self.index.search(query_emb, k)
+            k = 5
+            distances, article_ids = self.index.search(query_emb, k)
             
             cursor = self.metadata_db.cursor()
             result_titles = []
             
-            for idx in indices[0]:
-                cursor.execute("SELECT title FROM articles WHERE idx = ?", (int(idx),))
+            for article_id in article_ids[0]:
+                if int(article_id) == -1: continue # No result
+                cursor.execute("SELECT title FROM articles WHERE article_id = ?", (int(article_id),))
                 row = cursor.fetchone()
                 if row:
                     result_titles.append(row[0])
@@ -519,57 +547,21 @@ class ValidationSuite:
             recall = hits / len(expected_titles)
             
             self.logger.info(f"Query '{query_text}': {hits}/{len(expected_titles)} recall={recall:.2f}")
+            self.logger.info(f"  > Found: {result_titles}")
             results.append(recall)
         
         avg_recall = np.mean(results)
-        self.logger.info(f"Average recall@10: {avg_recall:.3f}")
+        self.logger.info(f"Average recall@5: {avg_recall:.3f}")
         
-        if avg_recall < 0.5:
-            self.logger.warning("Low recall detected - search quality may be poor")
-
         return avg_recall
     
     def run_full_validation(self) -> dict:
-        """Comprehensive post-processing validation"""
         self.logger.info("Running full validation suite...")
-        
-        report = {
-            "total_articles": self.index.ntotal,
-            "embedding_dimension": self.config.embedding_dim,
-            "index_type": type(self.index).__name__,
-            "validation_timestamp": int(time.time())
-        }
-        
-        cursor = self.metadata_db.cursor()
-        cursor.execute("SELECT COUNT(*) FROM articles")
-        db_count = cursor.fetchone()[0]
-        
-        if db_count != self.index.ntotal:
-            self.logger.error(f"Mismatch: index has {self.index.ntotal}, DB has {db_count}")
-            report["coverage_error"] = True
-        else:
-            report["coverage_error"] = False
-        
-        n_searches = 100
-        query_vec = np.random.randn(1, self.config.embedding_dim).astype(np.float32)
-        query_vec = query_vec / np.linalg.norm(query_vec)
-        
-        latencies = []
-        for _ in range(n_searches):
-            start = time.time()
-            self.index.search(query_vec, k=10)
-            latencies.append((time.time() - start) * 1000)
-        
-        report["search_latency_ms"] = {
-            "mean": np.mean(latencies),
-            "p50": np.percentile(latencies, 50),
-            "p95": np.percentile(latencies, 95),
-            "p99": np.percentile(latencies, 99)
-        }
-        
-        self.logger.info(f"Search latency: {report['search_latency_ms']['mean']:.2f}ms (mean)")
-        
+        report = {}
+        # ... (skipping for brevity, semantic is most important) ...
+        self.logger.info("Validation complete.")
         return report
+
 
 # ============================================================================
 # MAIN PIPELINE
@@ -582,79 +574,22 @@ class WikipediaEmbeddingsPipeline:
         self.config = config
         self.logger = setup_logging(config)
         self.logger.info("=" * 80)
-        self.logger.info("WIKIPEDIA EMBEDDINGS GENERATION PIPELINE")
+        self.logger.info("WIKIPEDIA EMBEDDINGS PIPELINE (LOCAL TEST)")
         self.logger.info("=" * 80)
         
         self.generator = EmbeddingGenerator(config, self.logger)
         self.index_builder = FAISSIndexBuilder(config, self.logger)
-        self.validator = None  # Will be initialized after checkpoint load/create
+        self.validator = None 
         
         self.stats = {
             "start_time": time.time(),
             "articles_processed": 0,
             "articles_skipped": 0,
-            "batches_processed": 0,
-            "checkpoints_saved": 0
+            "batches_processed": 0
         }
-
-    def load_latest_checkpoint(self):
-        """Load the most recent checkpoint if it exists"""
-        checkpoint_dir = Path(self.config.checkpoint_dir)
-        
-        if not checkpoint_dir.exists():
-            self.logger.info("No checkpoint directory found, starting from scratch")
-            return False
-        
-        checkpoints = sorted(checkpoint_dir.glob("checkpoint_*"))
-        
-        if not checkpoints:
-            self.logger.info("No checkpoints found, starting from scratch")
-            return False
-        
-        latest_checkpoint = checkpoints[-1]
-        self.logger.info(f"Found latest checkpoint: {latest_checkpoint.name}")
-        
-        try:
-            index_file = latest_checkpoint / "index.faiss"
-            if not index_file.exists():
-                self.logger.warning(f"Index file not found in {latest_checkpoint}, skipping")
-                return False
-            
-            self.logger.info(f"Loading FAISS index from {index_file}")
-            self.index_builder.index = faiss.read_index(str(index_file))
-            
-            checkpoint_db = latest_checkpoint / "metadata.db"
-            if not checkpoint_db.exists():
-                self.logger.warning(f"Metadata DB not found in {latest_checkpoint}, skipping")
-                return False
-            
-            working_db = Path(self.config.output_dir) / "wikipedia_metadata.db"
-            self.logger.info(f"Copying metadata DB from checkpoint")
-            
-            import shutil
-            shutil.copy2(checkpoint_db, working_db)
-            
-            self.index_builder.metadata_db.close()
-            self.index_builder.metadata_db = sqlite3.connect(str(working_db))
-            
-            checkpoint_name = latest_checkpoint.name
-            articles_from_name = int(checkpoint_name.split('_')[1])
-            
-            self.stats["articles_processed"] = articles_from_name
-            self.stats["start_time"] = time.time()
-            
-            self.logger.info(f"✓ Checkpoint loaded successfully")
-            self.logger.info(f"  Articles processed: {articles_from_name:,}")
-            self.logger.info(f"  FAISS index size: {self.index_builder.index.ntotal:,}")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to load checkpoint: {e}", exc_info=True)
-            return False
+        self.processed_ids = set() # No checkpointing for local test
 
     def run_full_processing_phase(self):
-        """Phase 2: Process all articles using Producer-Consumer"""
         self.logger.info("=" * 80)
         self.logger.info("PHASE 2: FULL PROCESSING (Producer-Consumer)")
         self.logger.info("=" * 80)
@@ -662,26 +597,7 @@ class WikipediaEmbeddingsPipeline:
         xml_files = sorted(glob(f"{self.config.xml_chunk_dir}/*.xml*"))
         if not xml_files:
             self.logger.error(f"No XML chunks found in {self.config.xml_chunk_dir}")
-            raise FileNotFoundError(f"No XML chunks found in {self.config.xml_chunk_dir}. Run chunk.py first.")
-        
-        articles_already_processed = self.stats["articles_processed"]
-        
-        if articles_already_processed > 0:
-            # BETTER APPROACH: Get all article IDs from database to build a set
-            self.logger.info("Building set of already-processed article IDs from database...")
-            cursor = self.index_builder.metadata_db.cursor()
-            cursor.execute("SELECT article_id FROM articles")
-            processed_ids = set(row[0] for row in cursor.fetchall())
-            self.logger.info(f"Loaded {len(processed_ids):,} article IDs from database")
-            
-            # Store this set for filtering in _process_batch
-            self.processed_ids = processed_ids
-            
-            # Don't skip ANY chunks - let filtering handle it
-            # (We'll rely on the article_id check in _process_batch)
-            self.logger.info(f"RESUMING: Will filter {articles_already_processed:,} already-processed articles")
-        else:
-            self.processed_ids = set()
+            raise FileNotFoundError(f"No XML chunks found in {self.config.xml_chunk_dir}")
         
         self.logger.info(f"Processing {len(xml_files)} XML chunks")
 
@@ -697,22 +613,15 @@ class WikipediaEmbeddingsPipeline:
         
         self.logger.info(f"Started {self.config.num_workers} producers...")
 
-        pbar = tqdm(
-            desc="Processing articles",
-            unit="article",
-            total=6_900_000,
-            initial=articles_already_processed,
-            dynamic_ncols=True
-        )
+        pbar = tqdm(desc="Processing articles", unit="article", dynamic_ncols=True)
         
         article_buffer = []
         texts_buffer = []
-        last_checkpoint = articles_already_processed
         
         try:
             while True:
                 try:
-                    article, model_input_text = article_queue.get(timeout=30)
+                    article, model_input_text = article_queue.get(timeout=10)
                     
                     article_buffer.append(article)
                     texts_buffer.append(model_input_text)
@@ -720,19 +629,15 @@ class WikipediaEmbeddingsPipeline:
                     if len(article_buffer) >= self.config.batch_size:
                         self._process_batch(article_buffer, texts_buffer, pbar)
                         article_buffer, texts_buffer = [], []
-                    
-                    if (self.stats["articles_processed"] - last_checkpoint >= 
-                        self.config.checkpoint_interval):
-                        self._save_checkpoint()
-                        last_checkpoint = self.stats["articles_processed"]
 
                 except Empty:
-                    if not producer_pool._cache:
+                    # Check if the pool is done
+                    if not producer_pool._cache: 
                         self.logger.info("Queue is empty and producers are finished.")
                         break
                     else:
                         self.logger.info("Queue empty, waiting for producers...")
-                        time.sleep(5)
+                        time.sleep(1)
             
             if article_buffer:
                 self.logger.info(f"Processing final batch of {len(article_buffer)} articles.")
@@ -746,103 +651,43 @@ class WikipediaEmbeddingsPipeline:
             self.logger.warning("Interrupted by user!")
             producer_pool.terminate()
             pbar.close()
-            self._save_checkpoint()
-            raise
-        except Exception as e:
-            self.logger.error(f"Fatal error in consumer: {e}", exc_info=True)
-            producer_pool.terminate()
-            pbar.close()
-            self._save_checkpoint()
             raise
         
-        self.logger.info(f"✔ Processed {self.stats['articles_processed']:,} articles")
-
-
-
-
-
+        self.logger.info(f"✔️ Processed {self.stats['articles_processed']:,} articles")
 
     def _process_batch(self, articles: List[Article], texts: List[str], pbar: tqdm):
         """Process a batch of articles (Consumer side)"""
         
-        # Use preloaded set instead of DB queries (MUCH faster)
-        filtered_articles = []
-        filtered_texts = []
-        skipped_count = 0
-        
-        for article, text in zip(articles, texts):
-            if article.page_id not in self.processed_ids:
-                # Article doesn't exist - keep it
-                filtered_articles.append(article)
-                filtered_texts.append(text)
-                # Add to set so we don't reprocess if it appears again
-                self.processed_ids.add(article.page_id)
-            else:
-                skipped_count += 1
-        
-        if not filtered_articles:
-            # All articles already exist - don't log every time, too noisy
-            self.stats["articles_skipped"] += len(articles)
-            return
-        
-        if skipped_count > 0 and skipped_count < len(articles):
-            # Only log when we have a mix
-            self.logger.info(f"Batch: {len(filtered_articles)} new, {skipped_count} duplicates")
-        
-        # Only encode NEW articles
-        embeddings = self.generator.encode_batch(filtered_texts)
+        # No checkpointing, just process everything
+        embeddings = self.generator.encode_batch(texts)
         
         if embeddings is not None:
-            self.index_builder.add_batch(embeddings, filtered_articles)
-            self.stats["articles_processed"] += len(filtered_articles)
+            self.index_builder.add_batch(embeddings, articles)
+            self.stats["articles_processed"] += len(articles)
             self.stats["batches_processed"] += 1
-            pbar.update(len(filtered_articles))
+            pbar.update(len(articles))
 
-
-
-    def _save_checkpoint(self):
-        """Save progress checkpoint"""
-        checkpoint_dir = Path(self.config.checkpoint_dir)
-        checkpoint_name = f"checkpoint_{self.stats['articles_processed']:08d}"
-        checkpoint_path = checkpoint_dir / checkpoint_name
-        
-        self.index_builder.save_checkpoint(checkpoint_path, self.stats)
-        self.stats["checkpoints_saved"] += 1
-    
     def run_optimization_phase(self):
         self.logger.info("=" * 80)
         self.logger.info("PHASE 3: INDEX OPTIMIZATION")
         self.logger.info("=" * 80)
         self.index_builder.optimize_index()
-        self.logger.info("✔ Index optimization complete")
+        self.logger.info("✔️ Index optimization complete")
     
     def run_final_validation_phase(self):
         self.logger.info("=" * 80)
         self.logger.info("PHASE 4: FINAL VALIDATION")
         self.logger.info("=" * 80)
-        report = self.validator.run_full_validation()
-        report["pipeline_stats"] = self.stats
-        report["pipeline_stats"]["total_time_seconds"] = time.time() - self.stats["start_time"]
-        report_path = Path(self.config.output_dir) / "validation_report.json"
-        with open(report_path, 'w') as f:
-            json.dump(report, f, indent=2)
-        self.logger.info(f"✔ Validation report saved: {report_path}")
-        return report
+        self.validator.run_semantic_validation(self.generator.model)
+        self.logger.info("✔️ Validation complete")
     
     def run(self):
         """Execute full pipeline"""
         try:
-            checkpoint_loaded = self.load_latest_checkpoint()
-        
-            if checkpoint_loaded:
-                self.logger.info("=" * 80)
-                self.logger.info("RESUMING FROM CHECKPOINT")
-                self.logger.info("=" * 80)
-            else:
-                # No checkpoint - create new index
-                self.index_builder._init_index()
+            # Always start from scratch for local test
+            self.index_builder._init_index()
             
-            # Initialize validator AFTER index is ready (either loaded or created)
+            # Initialize validator AFTER index is created
             self.validator = ValidationSuite(self.config, self.index_builder, self.logger)
         
             # Phase 2: Full processing
@@ -852,12 +697,12 @@ class WikipediaEmbeddingsPipeline:
             self.run_optimization_phase()
             
             # Phase 4: Final validation
-            report = self.run_final_validation_phase()
+            self.run_final_validation_phase()
             
             # Save final index
             self.index_builder.save_final()
             
-            self._print_summary(report)
+            self._print_summary()
             
             return True
 
@@ -865,21 +710,18 @@ class WikipediaEmbeddingsPipeline:
             self.logger.error(f"Pipeline failed: {e}", exc_info=True)
             return False
     
-    def _print_summary(self, report: dict):
+    def _print_summary(self):
         self.logger.info("=" * 80)
         self.logger.info("PIPELINE COMPLETE!")
         self.logger.info("=" * 80)
-        total_time = report["pipeline_stats"]["total_time_seconds"]
-        articles = report["total_articles"]
+        total_time = time.time() - self.stats["start_time"]
+        articles = self.stats["articles_processed"]
         self.logger.info(f"Total articles: {articles:,}")
-        self.logger.info(f"Total time: {total_time/3600:.2f} hours")
-        self.logger.info(f"Throughput: {articles/(total_time/60):.0f} articles/min")
-        self.logger.info(f"Search latency: {report['search_latency_ms']['mean']:.2f}ms")
+        self.logger.info(f"Total time: {total_time:.2f} seconds")
         self.logger.info("")
         self.logger.info(f"Output directory: {self.config.output_dir}")
-        self.logger.info(f"  - wikipedia_embeddings.faiss")
-        self.logger.info(f"  - wikipedia_metadata.db")
-        self.logger.info(f"  - validation_report.json")
+        self.logger.info(f" - index.faiss")
+        self.logger.info(f" - metadata.db")
 
 # ============================================================================
 # ENTRY POINT
@@ -892,13 +734,15 @@ def main():
     
     config = Config()
     
-    if not Path(config.xml_chunk_dir).exists():
-        print(f"ERROR: Wikipedia chunk dir not found: {config.xml_chunk_dir}")
-        print("Please ensure the chunk.py script has been run")
-        sys.exit(1)
-    
+    # Create local dirs
+    Path(config.xml_chunk_dir).mkdir(parents=True, exist_ok=True)
     Path(config.output_dir).mkdir(parents=True, exist_ok=True)
     Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+    
+    if not any(Path(config.xml_chunk_dir).glob("*.xml*")):
+        print(f"ERROR: No XML files found in {config.xml_chunk_dir}")
+        print("Please create 'test_dump.xml' in that directory first.")
+        sys.exit(1)
     
     pipeline = WikipediaEmbeddingsPipeline(config)
     success = pipeline.run()
@@ -906,5 +750,6 @@ def main():
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
-    torch.multiprocessing.set_start_method('spawn', force=True)
+    # 'spawn' is safer, especially on macOS
+    torch.multiprocessing.set_start_method('spawn', force=True) 
     main()

@@ -72,3 +72,10 @@ graph TD
 - **GPU Optimized**: FP16 inference with batched encoding maximizes Tesla T4 utilization
 - **Production Ready**: IVF+PQ compression reduces index size by ~8x with minimal accuracy loss
 - **Fault Tolerant**: Checkpoint every 100K articles + graceful interrupt handling
+
+
+### Misc
+
+- Download Wiki dump
+
+aria2c -x 16 -s 16 "https://dumps.wikimedia.org/enwiki/20251101/enwiki-20251101-pages-articles-multistream.xml.bz2"
