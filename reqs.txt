@@ -11,4 +11,4 @@ psutil
 faiss-gpu==1.7.2
 
 # On MacOS
-faiss-cpu
+#faiss-cpu
