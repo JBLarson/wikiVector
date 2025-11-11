@@ -9,8 +9,8 @@ echo "Wikipedia Dump Decompression (Parallel)"
 echo "=========================================="
 echo ""
 
-#cd /mnt/data-large/wikipedia/raw
-cd data
+cd /mnt/data/wikipedia/raw
+#cd data
 
 INPUT_FILE="enwiki-20251101-pages-articles-multistream.xml.bz2"
 OUTPUT_FILE="enwiki-20251101-pages-articles-multistream.xml"
