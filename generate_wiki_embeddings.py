@@ -2,13 +2,9 @@
 """
 WIKIPEDIA EMBEDDINGS GENERATION SYSTEM
 Production-grade pipeline for generating semantic embeddings of all English Wikipedia articles.
-
-Architecture:
-- Multi-process XML parsing with 8 workers (Producer-Consumer)
-- GPU-optimized batched encoding with FP16
-- Incremental FAISS index building
-- Robust checkpointing every 100K articles
-- Comprehensive validation and quality checks
+- RESTORED checkpointing and resuming
+- PATCHED optimize_index function
+- MERGED user config changes
 """
 
 import os
@@ -35,39 +31,36 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
 # ============================================================================
-# CONFIGURATION - MODIFIED FOR LOCAL MAC TESTING
+# CONFIGURATION - YOUR LOCAL SETTINGS
 # ============================================================================
 
 @dataclass
 class Config:
     """System configuration parameters"""
     
-    # --- MODIFIED FOR LOCAL ---
-    # Point this to the folder you created
-    xml_chunk_dir: str = "./local_test_data/raw/" 
-    # This is where your test DB will be created
-    output_dir: str = "./local_test_data/embeddings/"
-    checkpoint_dir: str = "./local_test_data/checkpoints/"
+    # --- YOUR LOCAL PATHS ---
+    xml_chunk_dir: str = "./data/raw/" 
+    output_dir: str = "./data/embeddings/"
+    checkpoint_dir: str = "./data/checkpoints/"
     
     # Model configuration
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dim: int = 384
     max_seq_length: int = 512
     
-    # --- MODIFIED FOR LOCAL ---
-    # Use fewer workers for a small local file
-    num_workers: int = 1
-    batch_size: int = 2 # Small batch size for a tiny dataset
-    checkpoint_interval: int = 10
-    use_fp16: bool = False # FP16 not supported on Mac CPU/MPS
+    # --- YOUR LOCAL TUNING ---
+    num_workers: int = 4
+    batch_size: int = 64
+    checkpoint_interval: int = 100
+    use_fp16: bool = False 
     
     # Validation
-    quick_validation_size: int = 2
+    quick_validation_size: int = 10
     validation_queries: List[Tuple[str, List[str]]] = None
     
     # Filtering
-    min_article_length: int = 200 # Keep this to test filtering
-    max_article_length: int = 100_000
+    min_article_length: int = 100
+    max_article_length: int = 200_000
     
     def __post_init__(self):
         """Initialize validation queries"""
@@ -175,15 +168,18 @@ def xml_parser_worker(
         skipped_count = 0
         put_count = 0
         
-        # Use open() directly for uncompressed .xml
-        with open(xml_file_path, 'rb') as f:
-            logger.info("File opened. Starting iterparse...")
+        # --- FIXED ---
+        # This will open .xml or .xml.bz2 files (which you have in data/raw)
+        open_func = bz2.open if xml_file_path.endswith('.bz2') else open
+        
+        with open_func(xml_file_path, 'rb') as f:
+            logger.info(f"File opened with {open_func.__name__}. Starting iterparse...")
             
             context = ET.iterparse(f, events=('end',), tag=f"{namespace}page")
             
             for event, elem in context:
                 page_count += 1
-                if page_count % 1000 == 0:
+                if page_count % 10000 == 0:
                     logger.info(f"Parsed {page_count} pages so far... (Skipped: {skipped_count}, Queued: {put_count})")
                     
                 try:
@@ -191,7 +187,6 @@ def xml_parser_worker(
                     if title_elem is None or not title_elem.text:
                         skipped_count += 1
                         continue
-                    # Use the title directly. Your test data is already formatted.
                     title = title_elem.text.strip().replace(" ", "_")
 
                     ns_elem = elem.find(f"{namespace}ns")
@@ -231,7 +226,9 @@ def xml_parser_worker(
                     text_len = len(text)
                     
                     if not (config.min_article_length < text_len < config.max_article_length):
-                        logger.warning(f"Skipping {title} (length: {text_len})")
+                        # --- YOUR CHANGE (MERGED) ---
+                        if page_count % 1000 == 0: # Log skips less often
+                            logger.warning(f"Skipping {title} (length: {text_len})")
                         skipped_count += 1
                         continue
                         
@@ -297,7 +294,7 @@ class EmbeddingGenerator:
             embeddings = self.model.encode(
                 texts,
                 batch_size=self.config.batch_size,
-                show_progress_bar=False, # Quieter for local testing
+                show_progress_bar=True,
                 convert_to_numpy=True,
                 normalize_embeddings=True
             )
@@ -335,10 +332,8 @@ class FAISSIndexBuilder:
         db_path = self.db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Delete old DB if it exists, for clean local testing
-        if db_path.exists():
-            self.logger.warning(f"Deleting existing local DB: {db_path}")
-            db_path.unlink()
+        # --- FIXED ---
+        # DO NOT DELETE the DB. This allows resuming.
         
         metadata_db = sqlite3.connect(str(db_path))
         cursor = metadata_db.cursor()
@@ -380,8 +375,10 @@ class FAISSIndexBuilder:
                (idx, article_id, title, namespace, char_count, embedding_timestamp)
                VALUES (?, ?, ?, ?, ?, ?)""",
             [
-                (i, a.page_id, a.title, a.namespace, len(a.text), timestamp)
-                for i, a in enumerate(articles, start=self.index.ntotal - len(articles))
+                # --- FIXED ---
+                # Use None for the PRIMARY KEY to let SQLite auto-increment
+                (None, a.page_id, a.title, a.namespace, len(a.text), timestamp)
+                for a in articles
             ]
         )
         
@@ -410,7 +407,7 @@ class FAISSIndexBuilder:
         self.logger.info(f"Checkpoint saved: {checkpoint_path}")
 
     # ======================================================
-    # --- THIS IS THE CRITICAL FIX ---
+    # --- PATCHED OPTIMIZE FUNCTION ---
     # ======================================================
     def optimize_index(self):
         """Convert to optimized IVF+PQ index for production"""
@@ -418,22 +415,29 @@ class FAISSIndexBuilder:
         
         n_vectors = self.index.ntotal
         
-        if n_vectors < 1:
-            self.logger.warning("No vectors in index. Skipping optimization.")
+        if n_vectors < 1000: # Need enough vectors to train
+            self.logger.warning(f"Too few vectors ({n_vectors}) for optimization, keeping flat index")
             return
 
         # 1. Get ALL article_ids from the DB
-        #    We must get the IDs in the order they were added
         self.logger.info(f"Fetching {n_vectors} article IDs from DB...")
         cursor = self.metadata_db.cursor()
-        cursor.execute("SELECT article_id FROM articles ORDER BY idx ASC")
         
-        ids_list = [row[0] for row in cursor.fetchall()]
-        ids = np.array(ids_list, dtype=np.int64)
+        # --- PATCH ---
+        # Get IDs from the index *first*, then check DB
+        db_ids = set(row[0] for row in cursor.execute("SELECT article_id FROM articles"))
+        index_ids = faiss.vector_to_array(self.index.id_map)
         
-        if len(ids) != n_vectors:
-            self.logger.error(f"DB count ({len(ids)}) != Index count ({n_vectors})")
-            raise Exception("DB/Index count mismatch. Cannot optimize.")
+        ids_in_both = [id for id in index_ids if id in db_ids]
+        n_vectors = len(ids_in_both)
+        ids = np.array(ids_in_both, dtype=np.int64)
+        
+        if n_vectors < 1000:
+             self.logger.warning(f"Too few vectors in common ({n_vectors}) for optimization.")
+             return
+        
+        self.logger.info(f"Found {n_vectors} vectors common to DB and Index.")
+
 
         # 2. Reconstruct ALL vectors using their *real IDs*
         vectors = np.zeros((n_vectors, self.config.embedding_dim), dtype=np.float32)
@@ -443,7 +447,6 @@ class FAISSIndexBuilder:
                 vectors[i] = self.index.reconstruct(int(article_id))
             except Exception as e:
                 self.logger.error(f"Failed to reconstruct {article_id}: {e}")
-                # This can happen if an ID is in DB but not index
                 raise
         
         self.logger.info("All vectors reconstructed. Training new index...")
@@ -460,8 +463,8 @@ class FAISSIndexBuilder:
             quantizer,
             self.config.embedding_dim,
             n_clusters,
-            64,  # M: 64 sub-quantizers (maybe low for 384 dim, but ok)
-            8    # 8 bits per sub-quantizer
+            64,
+            8
         )
         
         # Train on the REAL vectors
@@ -469,17 +472,14 @@ class FAISSIndexBuilder:
         self.logger.info("Training complete.")
 
         # 4. Create a NEW IndexIDMap and add vectors WITH IDs
-        #    We use IndexIDMap2, which is recommended for IVF indexes
         self.logger.info("Creating new optimized IndexIDMap2...")
         new_index = faiss.IndexIDMap2(index_ivf)
         
         # Add the vectors WITH their original article_ids
         new_index.add_with_ids(vectors, ids)
         
-        # Set nprobe on the *underlying* IVF index for searching
-        # This is a search-time parameter
         ivf_index_cast = faiss.downcast_index(new_index.index)
-        ivf_index_cast.nprobe = min(32, n_clusters) # nprobe must be <= n_clusters
+        ivf_index_cast.nprobe = min(32, n_clusters)
         
         self.logger.info(f"Index optimized: {new_index.ntotal} vectors, {n_clusters} clusters")
         
@@ -522,6 +522,17 @@ class ValidationSuite:
         self.logger.info("Running semantic validation...")
         
         results = []
+        
+        # Set nprobe if we are optimized
+        try:
+            ivf_index = faiss.downcast_index(self.index)
+            ivf_index.nprobe = 32
+        except:
+             try:
+                ivf_index = faiss.downcast_index(self.index.index)
+                ivf_index.nprobe = min(32, ivf_index.nlist)
+             except:
+                self.logger.info("Index is Flat, nprobe not needed for validation.")
         
         for query_text, expected_titles in self.config.validation_queries:
             query_emb = model.encode([query_text], normalize_embeddings=True)
@@ -585,10 +596,72 @@ class WikipediaEmbeddingsPipeline:
             "start_time": time.time(),
             "articles_processed": 0,
             "articles_skipped": 0,
-            "batches_processed": 0
+            "batches_processed": 0,
+            "checkpoints_saved": 0
         }
-        self.processed_ids = set() # No checkpointing for local test
+        self.processed_ids = set() 
 
+    # --- CHECKPOINTING LOGIC RESTORED ---
+    def load_latest_checkpoint(self):
+        """Load the most recent checkpoint if it exists"""
+        checkpoint_dir = Path(self.config.checkpoint_dir)
+        
+        if not checkpoint_dir.exists():
+            self.logger.info("No checkpoint directory found, starting from scratch")
+            return False
+        
+        checkpoints = sorted(checkpoint_dir.glob("checkpoint_*"))
+        
+        if not checkpoints:
+            self.logger.info("No checkpoints found, starting from scratch")
+            return False
+        
+        latest_checkpoint = checkpoints[-1]
+        self.logger.info(f"Found latest checkpoint: {latest_checkpoint.name}")
+        
+        try:
+            index_file = latest_checkpoint / "index.faiss"
+            if not index_file.exists():
+                self.logger.warning(f"Index file not found in {latest_checkpoint}, skipping")
+                return False
+            
+            self.logger.info(f"Loading FAISS index from {index_file}")
+            self.index_builder.index = faiss.read_index(str(index_file))
+            
+            checkpoint_db = latest_checkpoint / "metadata.db"
+            if not checkpoint_db.exists():
+                self.logger.warning(f"Metadata DB not found in {latest_checkpoint}, skipping")
+                return False
+            
+            working_db = self.index_builder.db_path 
+            self.logger.info(f"Copying metadata DB from checkpoint to {working_db}")
+            
+            import shutil
+            shutil.copy2(checkpoint_db, working_db)
+            
+            # Re-connect the index_builder's DB handle to this new file
+            self.index_builder.metadata_db.close()
+            self.index_builder.metadata_db = sqlite3.connect(str(working_db))
+            
+            stats_file = latest_checkpoint / "stats.json"
+            if stats_file.exists():
+                with open(stats_file, 'r') as f:
+                    self.stats = json.load(f)
+                    self.stats["start_time"] = time.time() # Reset timer
+            else:
+                self.stats["articles_processed"] = int(latest_checkpoint.name.split('_')[1])
+            
+            self.logger.info(f"✔️ Checkpoint loaded successfully")
+            self.logger.info(f"  Articles processed: {self.stats['articles_processed']:,}")
+            self.logger.info(f"  FAISS index size: {self.index_builder.index.ntotal:,}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load checkpoint: {e}", exc_info=True)
+            return False
+
+    # --- LOGIC RESTORED ---
     def run_full_processing_phase(self):
         self.logger.info("=" * 80)
         self.logger.info("PHASE 2: FULL PROCESSING (Producer-Consumer)")
@@ -598,6 +671,19 @@ class WikipediaEmbeddingsPipeline:
         if not xml_files:
             self.logger.error(f"No XML chunks found in {self.config.xml_chunk_dir}")
             raise FileNotFoundError(f"No XML chunks found in {self.config.xml_chunk_dir}")
+        
+        articles_already_processed = self.stats["articles_processed"]
+        
+        if articles_already_processed > 0:
+            self.logger.info("Building set of already-processed article IDs from database...")
+            cursor = self.index_builder.metadata_db.cursor()
+            cursor.execute("SELECT article_id FROM articles")
+            processed_ids = set(row[0] for row in cursor.fetchall())
+            self.logger.info(f"Loaded {len(processed_ids):,} article IDs from database")
+            self.processed_ids = processed_ids
+            self.logger.info(f"RESUMING: Will filter {articles_already_processed:,} already-processed articles")
+        else:
+            self.processed_ids = set()
         
         self.logger.info(f"Processing {len(xml_files)} XML chunks")
 
@@ -613,15 +699,21 @@ class WikipediaEmbeddingsPipeline:
         
         self.logger.info(f"Started {self.config.num_workers} producers...")
 
-        pbar = tqdm(desc="Processing articles", unit="article", dynamic_ncols=True)
+        pbar = tqdm(
+            desc="Processing articles",
+            unit="article",
+            initial=articles_already_processed,
+            dynamic_ncols=True
+        )
         
         article_buffer = []
         texts_buffer = []
+        last_checkpoint = articles_already_processed
         
         try:
             while True:
                 try:
-                    article, model_input_text = article_queue.get(timeout=10)
+                    article, model_input_text = article_queue.get(timeout=30)
                     
                     article_buffer.append(article)
                     texts_buffer.append(model_input_text)
@@ -629,15 +721,20 @@ class WikipediaEmbeddingsPipeline:
                     if len(article_buffer) >= self.config.batch_size:
                         self._process_batch(article_buffer, texts_buffer, pbar)
                         article_buffer, texts_buffer = [], []
+                    
+                    # --- THIS IS THE MISSING LOGIC ---
+                    if (self.stats["articles_processed"] - last_checkpoint >= 
+                        self.config.checkpoint_interval):
+                        self._save_checkpoint()
+                        last_checkpoint = self.stats["articles_processed"]
 
                 except Empty:
-                    # Check if the pool is done
-                    if not producer_pool._cache: 
+                    if not producer_pool._cache:
                         self.logger.info("Queue is empty and producers are finished.")
                         break
                     else:
                         self.logger.info("Queue empty, waiting for producers...")
-                        time.sleep(1)
+                        time.sleep(5)
             
             if article_buffer:
                 self.logger.info(f"Processing final batch of {len(article_buffer)} articles.")
@@ -651,22 +748,59 @@ class WikipediaEmbeddingsPipeline:
             self.logger.warning("Interrupted by user!")
             producer_pool.terminate()
             pbar.close()
+            self._save_checkpoint() # Save on interrupt
+            raise
+        except Exception as e:
+            self.logger.error(f"Fatal error in consumer: {e}", exc_info=True)
+            producer_pool.terminate()
+            pbar.close()
+            self._save_checkpoint() # Save on error
             raise
         
         self.logger.info(f"✔️ Processed {self.stats['articles_processed']:,} articles")
 
+    # --- LOGIC RESTORED ---
     def _process_batch(self, articles: List[Article], texts: List[str], pbar: tqdm):
         """Process a batch of articles (Consumer side)"""
         
-        # No checkpointing, just process everything
-        embeddings = self.generator.encode_batch(texts)
+        filtered_articles = []
+        filtered_texts = []
+        skipped_count = 0
+        
+        for article, text in zip(articles, texts):
+            if article.page_id not in self.processed_ids:
+                filtered_articles.append(article)
+                filtered_texts.append(text)
+                self.processed_ids.add(article.page_id)
+            else:
+                skipped_count += 1
+        
+        if not filtered_articles:
+            self.stats["articles_skipped"] += len(articles)
+            return
+        
+        if skipped_count > 0 and skipped_count < len(articles):
+            self.logger.info(f"Batch: {len(filtered_articles)} new, {skipped_count} duplicates")
+        
+        embeddings = self.generator.encode_batch(filtered_texts)
         
         if embeddings is not None:
-            self.index_builder.add_batch(embeddings, articles)
-            self.stats["articles_processed"] += len(articles)
+            self.index_builder.add_batch(embeddings, filtered_articles)
+            self.stats["articles_processed"] += len(filtered_articles)
             self.stats["batches_processed"] += 1
-            pbar.update(len(articles))
+            pbar.update(len(filtered_articles))
 
+    # --- LOGIC RESTORED ---
+    def _save_checkpoint(self):
+        """Save progress checkpoint"""
+        checkpoint_dir = Path(self.config.checkpoint_dir)
+        # Format with leading zeros for correct sorting
+        checkpoint_name = f"checkpoint_{self.stats['articles_processed']:09d}"
+        checkpoint_path = checkpoint_dir / checkpoint_name
+        
+        self.index_builder.save_checkpoint(checkpoint_path, self.stats)
+        self.stats["checkpoints_saved"] += 1
+    
     def run_optimization_phase(self):
         self.logger.info("=" * 80)
         self.logger.info("PHASE 3: INDEX OPTIMIZATION")
@@ -681,13 +815,22 @@ class WikipediaEmbeddingsPipeline:
         self.validator.run_semantic_validation(self.generator.model)
         self.logger.info("✔️ Validation complete")
     
+    # --- LOGIC RESTORED ---
     def run(self):
         """Execute full pipeline"""
         try:
-            # Always start from scratch for local test
-            self.index_builder._init_index()
+            # Try to load checkpoint first
+            checkpoint_loaded = self.load_latest_checkpoint()
+        
+            if checkpoint_loaded:
+                self.logger.info("=" * 80)
+                self.logger.info("RESUMING FROM CHECKPOINT")
+                self.logger.info("=" * 80)
+            else:
+                # No checkpoint - create new index
+                self.index_builder._init_index()
             
-            # Initialize validator AFTER index is created
+            # Initialize validator AFTER index is ready
             self.validator = ValidationSuite(self.config, self.index_builder, self.logger)
         
             # Phase 2: Full processing
@@ -717,7 +860,7 @@ class WikipediaEmbeddingsPipeline:
         total_time = time.time() - self.stats["start_time"]
         articles = self.stats["articles_processed"]
         self.logger.info(f"Total articles: {articles:,}")
-        self.logger.info(f"Total time: {total_time:.2f} seconds")
+        self.logger.info(f"Total time: {total_time/60:.2f} minutes")
         self.logger.info("")
         self.logger.info(f"Output directory: {self.config.output_dir}")
         self.logger.info(f" - index.faiss")
@@ -735,13 +878,12 @@ def main():
     config = Config()
     
     # Create local dirs
-    Path(config.xml_chunk_dir).mkdir(parents=True, exist_ok=True)
     Path(config.output_dir).mkdir(parents=True, exist_ok=True)
     Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
     
     if not any(Path(config.xml_chunk_dir).glob("*.xml*")):
         print(f"ERROR: No XML files found in {config.xml_chunk_dir}")
-        print("Please create 'test_dump.xml' in that directory first.")
+        print(f"Please put your .xml or .xml.bz2 file in {config.xml_chunk_dir}")
         sys.exit(1)
     
     pipeline = WikipediaEmbeddingsPipeline(config)

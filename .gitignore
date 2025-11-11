@@ -28,6 +28,3 @@ build/
 # OS
 .DS_Store
 Thumbs.db
-EOF
-
-wikiVectorKey.pem
