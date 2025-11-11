@@ -1,1 +1,1 @@
-gcloud compute ssh jb12larson@wikipedia-embeddings --zone=us-central1-a
+gcloud compute ssh jb12larson@wiki-processor --zone=us-east1-d

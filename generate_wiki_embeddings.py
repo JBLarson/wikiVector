@@ -2,9 +2,13 @@
 """
 WIKIPEDIA EMBEDDINGS GENERATION SYSTEM
 Production-grade pipeline for generating semantic embeddings of all English Wikipedia articles.
-- RESTORED checkpointing and resuming
-- PATCHED optimize_index function
-- MERGED user config changes
+
+Architecture:
+- Multi-process XML parsing (Producer-Consumer)
+- GPU-optimized batched encoding with FP16
+- Incremental FAISS index building
+- Robust checkpointing every 100K articles
+- Comprehensive validation and quality checks
 """
 
 import os
@@ -16,6 +20,7 @@ import sqlite3
 import hashlib
 import logging
 import re
+import shutil
 from glob import glob
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -31,43 +36,47 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
 # ============================================================================
-# CONFIGURATION - YOUR LOCAL SETTINGS
+# CONFIGURATION - PRODUCTION
 # ============================================================================
 
 @dataclass
 class Config:
     """System configuration parameters"""
     
-    # --- YOUR LOCAL PATHS ---
-    xml_chunk_dir: str = "./data/raw/" 
-    output_dir: str = "./data/embeddings/"
-    checkpoint_dir: str = "./data/checkpoints/"
+    # --- PRODUCTION PATHS ---
+    xml_chunk_dir: str = "/mnt/data/wikipedia/raw/" 
+    output_dir: str = "/mnt/data/wikipedia/embeddings/"
+    checkpoint_dir: str = "/mnt/data/wikipedia/checkpoints/"
     
     # Model configuration
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dim: int = 384
     max_seq_length: int = 512
     
-    # --- YOUR LOCAL TUNING ---
-    num_workers: int = 4
-    batch_size: int = 64
-    checkpoint_interval: int = 100
-    use_fp16: bool = False 
+    # --- PRODUCTION TUNING ---
+    # Use (CPUs - 1) for parsing
+    num_workers: int = os.cpu_count() - 1 if os.cpu_count() > 1 else 1
+    batch_size: int = 512
+    checkpoint_interval: int = 100_000 # Original 100k
+    use_fp16: bool = True # Enable for NVIDIA GPU
     
     # Validation
-    quick_validation_size: int = 10
+    quick_validation_size: int = 10_000
     validation_queries: List[Tuple[str, List[str]]] = None
     
     # Filtering
-    min_article_length: int = 100
-    max_article_length: int = 200_000
+    min_article_length: int = 100 # Your setting
+    # max_article_length is REMOVED. We truncate instead.
     
     def __post_init__(self):
         """Initialize validation queries"""
         if self.validation_queries is None:
             self.validation_queries = [
-                ("programming languages", ["Python_(programming_language)", "Machine_learning"]),
-                ("European countries", ["France", "Germany"]),
+                ("programming languages", ["Python_(programming_language)", "JavaScript", "Java_(programming_language)"]),
+                ("machine learning", ["Machine_learning", "Deep_learning", "Neural_network"]),
+                ("European countries", ["France", "Germany", "United_Kingdom"]),
+                ("physics concepts", ["Quantum_mechanics", "General_relativity", "Thermodynamics"]),
+                ("Renaissance artists", ["Leonardo_da_Vinci", "Michelangelo", "Raphael"]),
             ]
 
 # ============================================================================
@@ -168,8 +177,6 @@ def xml_parser_worker(
         skipped_count = 0
         put_count = 0
         
-        # --- FIXED ---
-        # This will open .xml or .xml.bz2 files (which you have in data/raw)
         open_func = bz2.open if xml_file_path.endswith('.bz2') else open
         
         with open_func(xml_file_path, 'rb') as f:
@@ -179,7 +186,7 @@ def xml_parser_worker(
             
             for event, elem in context:
                 page_count += 1
-                if page_count % 10000 == 0:
+                if page_count % 20000 == 0:
                     logger.info(f"Parsed {page_count} pages so far... (Skipped: {skipped_count}, Queued: {put_count})")
                     
                 try:
@@ -225,19 +232,26 @@ def xml_parser_worker(
                     text = _clean_wikitext(text_elem.text)
                     text_len = len(text)
                     
-                    if not (config.min_article_length < text_len < config.max_article_length):
-                        # --- YOUR CHANGE (MERGED) ---
-                        if page_count % 1000 == 0: # Log skips less often
-                            logger.warning(f"Skipping {title} (length: {text_len})")
+                    # --- THIS IS YOUR NEW LOGIC ---
+                    # 1. Check MINIMUM length only
+                    if text_len < config.min_article_length:
+                        if page_count % 20000 == 0: # Log skips less often
+                             logger.warning(f"Skipping {title} (length: {text_len})")
                         skipped_count += 1
                         continue
                         
+                    # 2. Truncate text for storage (e.g., first 20k chars)
+                    #    This is just to keep the metadata DB manageable.
+                    truncated_text = text[:20000] 
+                    
                     article = Article(
                         page_id=page_id,
                         title=title,
                         namespace=ns_value,
-                        text=text
+                        text=truncated_text # Save truncated text
                     )
+                    
+                    # 3. Model input is *already* truncated to first 2k chars
                     model_input_text = f"{title.replace('_', ' ')}. {text[:2000]}"
                         
                     queue.put((article, model_input_text))
@@ -261,7 +275,7 @@ def xml_parser_worker(
 # ============================================================================
 
 class EmbeddingGenerator:
-    """Embedding generation with batching"""
+    """GPU-optimized embedding generation with batching"""
     
     def __init__(self, config: Config, logger: logging.Logger):
         self.config = config
@@ -270,23 +284,28 @@ class EmbeddingGenerator:
         self.model = self._load_model()
         
     def _setup_device(self) -> str:
-        # Check for Mac MPS (Apple Silicon GPU)
-        if torch.backends.mps.is_available():
-            device = "mps"
-            self.logger.info("Mac MPS (GPU) detected. Using 'mps' device.")
-        elif torch.cuda.is_available():
+        # --- PRODUCTION DEVICE SETUP ---
+        if torch.cuda.is_available():
             device = "cuda"
-            self.logger.info("NVIDIA GPU detected. Using 'cuda' device.")
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
+            self.logger.info(f"GPU detected: {gpu_name} ({gpu_memory:.1f}GB)")
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
         else:
             device = "cpu"
-            self.logger.warning("No GPU detected, using CPU.")
+            self.logger.warning("No GPU detected, using CPU (will be much slower)")
         return device
     
     def _load_model(self) -> SentenceTransformer:
         self.logger.info(f"Loading model: {self.config.model_name}")
         model = SentenceTransformer(self.config.model_name, device=self.device)
         model.max_seq_length = self.config.max_seq_length
-        # Note: FP16 is not enabled for MPS/CPU
+        # --- PRODUCTION FP16 ---
+        if self.config.use_fp16 and self.device == "cuda":
+            model = model.half()
+            self.logger.info("Enabled FP16 inference for 2x speedup")
+        _ = model.encode(["warmup"], show_progress_bar=False)
         return model
     
     def encode_batch(self, texts: List[str]) -> np.ndarray:
@@ -303,7 +322,9 @@ class EmbeddingGenerator:
                 return None
             return embeddings.astype(np.float32)
         except RuntimeError as e:
-            self.logger.error(f"Error during encoding: {e}")
+            if "out of memory" in str(e):
+                self.logger.error("GPU OOM! Reduce batch size")
+                torch.cuda.empty_cache()
             raise
 
 # ============================================================================
@@ -323,7 +344,6 @@ class FAISSIndexBuilder:
     def _init_index(self):
         """Initialize FAISS index - only call if NOT loading from checkpoint"""
         self.index = faiss.IndexFlatIP(self.config.embedding_dim)
-        # CRITICAL: This maps article_id -> vector
         self.index = faiss.IndexIDMap(self.index) 
         self.logger.info(f"Initialized new FAISS index (dim={self.config.embedding_dim})")
     
@@ -331,9 +351,6 @@ class FAISSIndexBuilder:
         """Initialize SQLite database for metadata"""
         db_path = self.db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # --- FIXED ---
-        # DO NOT DELETE the DB. This allows resuming.
         
         metadata_db = sqlite3.connect(str(db_path))
         cursor = metadata_db.cursor()
@@ -375,8 +392,6 @@ class FAISSIndexBuilder:
                (idx, article_id, title, namespace, char_count, embedding_timestamp)
                VALUES (?, ?, ?, ?, ?, ?)""",
             [
-                # --- FIXED ---
-                # Use None for the PRIMARY KEY to let SQLite auto-increment
                 (None, a.page_id, a.title, a.namespace, len(a.text), timestamp)
                 for a in articles
             ]
@@ -384,27 +399,35 @@ class FAISSIndexBuilder:
         
         self.metadata_db.commit()
     
-    def save_checkpoint(self, checkpoint_path: Path, stats: dict):
-        """Save index and metadata checkpoint"""
-        checkpoint_path.mkdir(parents=True, exist_ok=True)
-        
-        index_path = checkpoint_path / "index.faiss"
-        faiss.write_index(self.index, str(index_path))
-        
-        checkpoint_db = checkpoint_path / "metadata.db"
-        
-        # Backup the main DB to the checkpoint location
-        source_conn = sqlite3.connect(str(self.db_path))
-        dest_conn = sqlite3.connect(str(checkpoint_db))
-        source_conn.backup(dest_conn)
-        source_conn.close()
-        dest_conn.close()
-        
-        stats_path = checkpoint_path / "stats.json"
-        with open(stats_path, 'w') as f:
-            json.dump(stats, f, indent=2)
-        
-        self.logger.info(f"Checkpoint saved: {checkpoint_path}")
+    def _save_checkpoint(self):
+            """Save progress checkpoint and prune old ones"""
+            checkpoint_dir = Path(self.config.checkpoint_dir)
+            checkpoint_name = f"checkpoint_{self.stats['articles_processed']:09d}"
+            checkpoint_path = checkpoint_dir / checkpoint_name
+            
+            # --- Save the new checkpoint ---
+            self.index_builder.save_checkpoint(checkpoint_path, self.stats)
+            self.stats["checkpoints_saved"] += 1
+            
+            # --- NEW LOGIC: Prune old checkpoints ---
+            try:
+                # Get all checkpoint directories, sorted alphabetically by name
+                # (e.g., checkpoint_001, checkpoint_002)
+                checkpoints = sorted(checkpoint_dir.glob("checkpoint_*"))
+                
+                # Keep only the 3 most recent
+                if len(checkpoints) > 3:
+                    # Get all checkpoints *except* the last 3
+                    checkpoints_to_delete = checkpoints[:-3]
+                    self.logger.info(f"Pruning {len(checkpoints_to_delete)} old checkpoints...")
+                    
+                    for old_checkpoint in checkpoints_to_delete:
+                        self.logger.warning(f"Deleting old checkpoint: {old_checkpoint.name}")
+                        # Recursively delete the entire directory
+                        shutil.rmtree(old_checkpoint)
+                        
+            except Exception as e:
+                self.logger.error(f"Failed to prune old checkpoints: {e}")
 
     # ======================================================
     # --- PATCHED OPTIMIZE FUNCTION ---
@@ -419,12 +442,9 @@ class FAISSIndexBuilder:
             self.logger.warning(f"Too few vectors ({n_vectors}) for optimization, keeping flat index")
             return
 
-        # 1. Get ALL article_ids from the DB
         self.logger.info(f"Fetching {n_vectors} article IDs from DB...")
         cursor = self.metadata_db.cursor()
         
-        # --- PATCH ---
-        # Get IDs from the index *first*, then check DB
         db_ids = set(row[0] for row in cursor.execute("SELECT article_id FROM articles"))
         index_ids = faiss.vector_to_array(self.index.id_map)
         
@@ -438,8 +458,6 @@ class FAISSIndexBuilder:
         
         self.logger.info(f"Found {n_vectors} vectors common to DB and Index.")
 
-
-        # 2. Reconstruct ALL vectors using their *real IDs*
         vectors = np.zeros((n_vectors, self.config.embedding_dim), dtype=np.float32)
         self.logger.info("Reconstructing all vectors from flat index...")
         for i, article_id in enumerate(tqdm(ids, desc="Reconstructing vectors")):
@@ -451,9 +469,8 @@ class FAISSIndexBuilder:
         
         self.logger.info("All vectors reconstructed. Training new index...")
 
-        # 3. Build new optimized index
         n_clusters = int(np.sqrt(n_vectors))
-        n_clusters = min(n_clusters, max(1, n_vectors // 39)) # Ensure n_clusters >= 1
+        n_clusters = min(n_clusters, max(1, n_vectors // 39))
         if n_clusters < 1: n_clusters = 1
         
         self.logger.info(f"Training IVF with {n_clusters} clusters...")
@@ -467,15 +484,12 @@ class FAISSIndexBuilder:
             8
         )
         
-        # Train on the REAL vectors
         index_ivf.train(vectors)
         self.logger.info("Training complete.")
 
-        # 4. Create a NEW IndexIDMap and add vectors WITH IDs
         self.logger.info("Creating new optimized IndexIDMap2...")
         new_index = faiss.IndexIDMap2(index_ivf)
         
-        # Add the vectors WITH their original article_ids
         new_index.add_with_ids(vectors, ids)
         
         ivf_index_cast = faiss.downcast_index(new_index.index)
@@ -483,7 +497,6 @@ class FAISSIndexBuilder:
         
         self.logger.info(f"Index optimized: {new_index.ntotal} vectors, {n_clusters} clusters")
         
-        # Replace the old index
         self.index = new_index
     
     def save_final(self):
@@ -523,7 +536,6 @@ class ValidationSuite:
         
         results = []
         
-        # Set nprobe if we are optimized
         try:
             ivf_index = faiss.downcast_index(self.index)
             ivf_index.nprobe = 32
@@ -541,14 +553,14 @@ class ValidationSuite:
             if query_emb.ndim == 1:
                 query_emb = query_emb.reshape(1, -1)
             
-            k = 5
+            k = 10
             distances, article_ids = self.index.search(query_emb, k)
             
             cursor = self.metadata_db.cursor()
             result_titles = []
             
             for article_id in article_ids[0]:
-                if int(article_id) == -1: continue # No result
+                if int(article_id) == -1: continue
                 cursor.execute("SELECT title FROM articles WHERE article_id = ?", (int(article_id),))
                 row = cursor.fetchone()
                 if row:
@@ -562,17 +574,50 @@ class ValidationSuite:
             results.append(recall)
         
         avg_recall = np.mean(results)
-        self.logger.info(f"Average recall@5: {avg_recall:.3f}")
-        
+        self.logger.info(f"Average recall@10: {avg_recall:.3f}")
         return avg_recall
     
     def run_full_validation(self) -> dict:
+        """Comprehensive post-processing validation"""
         self.logger.info("Running full validation suite...")
-        report = {}
-        # ... (skipping for brevity, semantic is most important) ...
-        self.logger.info("Validation complete.")
+        
+        report = {
+            "total_articles": self.index.ntotal,
+            "embedding_dimension": self.config.embedding_dim,
+            "index_type": type(self.index).__name__,
+            "validation_timestamp": int(time.time())
+        }
+        
+        cursor = self.metadata_db.cursor()
+        cursor.execute("SELECT COUNT(*) FROM articles")
+        db_count = cursor.fetchone()[0]
+        
+        if db_count != self.index.ntotal:
+            self.logger.error(f"Mismatch: index has {self.index.ntotal}, DB has {db_count}")
+            report["coverage_error"] = True
+        else:
+            report["coverage_error"] = False
+        
+        n_searches = 100
+        query_vec = np.random.randn(1, self.config.embedding_dim).astype(np.float32)
+        query_vec = query_vec / np.linalg.norm(query_vec)
+        
+        latencies = []
+        for _ in range(n_searches):
+            start = time.time()
+            self.index.search(query_vec, k=10)
+            latencies.append((time.time() - start) * 1000)
+        
+        report["search_latency_ms"] = {
+            "mean": np.mean(latencies),
+            "p50": np.percentile(latencies, 50),
+            "p95": np.percentile(latencies, 95),
+            "p99": np.percentile(latencies, 99)
+        }
+        
+        self.logger.info(f"Search latency: {report['search_latency_ms']['mean']:.2f}ms (mean)")
+        
         return report
-
 
 # ============================================================================
 # MAIN PIPELINE
@@ -585,7 +630,7 @@ class WikipediaEmbeddingsPipeline:
         self.config = config
         self.logger = setup_logging(config)
         self.logger.info("=" * 80)
-        self.logger.info("WIKIPEDIA EMBEDDINGS PIPELINE (LOCAL TEST)")
+        self.logger.info("WIKIPEDIA EMBEDDINGS PIPELINE (PRODUCTION)")
         self.logger.info("=" * 80)
         
         self.generator = EmbeddingGenerator(config, self.logger)
@@ -601,7 +646,6 @@ class WikipediaEmbeddingsPipeline:
         }
         self.processed_ids = set() 
 
-    # --- CHECKPOINTING LOGIC RESTORED ---
     def load_latest_checkpoint(self):
         """Load the most recent checkpoint if it exists"""
         checkpoint_dir = Path(self.config.checkpoint_dir)
@@ -639,7 +683,6 @@ class WikipediaEmbeddingsPipeline:
             import shutil
             shutil.copy2(checkpoint_db, working_db)
             
-            # Re-connect the index_builder's DB handle to this new file
             self.index_builder.metadata_db.close()
             self.index_builder.metadata_db = sqlite3.connect(str(working_db))
             
@@ -661,7 +704,6 @@ class WikipediaEmbeddingsPipeline:
             self.logger.error(f"Failed to load checkpoint: {e}", exc_info=True)
             return False
 
-    # --- LOGIC RESTORED ---
     def run_full_processing_phase(self):
         self.logger.info("=" * 80)
         self.logger.info("PHASE 2: FULL PROCESSING (Producer-Consumer)")
@@ -722,7 +764,6 @@ class WikipediaEmbeddingsPipeline:
                         self._process_batch(article_buffer, texts_buffer, pbar)
                         article_buffer, texts_buffer = [], []
                     
-                    # --- THIS IS THE MISSING LOGIC ---
                     if (self.stats["articles_processed"] - last_checkpoint >= 
                         self.config.checkpoint_interval):
                         self._save_checkpoint()
@@ -759,7 +800,6 @@ class WikipediaEmbeddingsPipeline:
         
         self.logger.info(f"✔️ Processed {self.stats['articles_processed']:,} articles")
 
-    # --- LOGIC RESTORED ---
     def _process_batch(self, articles: List[Article], texts: List[str], pbar: tqdm):
         """Process a batch of articles (Consumer side)"""
         
@@ -790,11 +830,9 @@ class WikipediaEmbeddingsPipeline:
             self.stats["batches_processed"] += 1
             pbar.update(len(filtered_articles))
 
-    # --- LOGIC RESTORED ---
     def _save_checkpoint(self):
         """Save progress checkpoint"""
         checkpoint_dir = Path(self.config.checkpoint_dir)
-        # Format with leading zeros for correct sorting
         checkpoint_name = f"checkpoint_{self.stats['articles_processed']:09d}"
         checkpoint_path = checkpoint_dir / checkpoint_name
         
@@ -812,14 +850,18 @@ class WikipediaEmbeddingsPipeline:
         self.logger.info("=" * 80)
         self.logger.info("PHASE 4: FINAL VALIDATION")
         self.logger.info("=" * 80)
-        self.validator.run_semantic_validation(self.generator.model)
-        self.logger.info("✔️ Validation complete")
+        report = self.validator.run_full_validation()
+        report["pipeline_stats"] = self.stats
+        report["pipeline_stats"]["total_time_seconds"] = time.time() - self.stats["start_time"]
+        report_path = Path(self.config.output_dir) / "validation_report.json"
+        with open(report_path, 'w') as f:
+            json.dump(report, f, indent=2)
+        self.logger.info(f"✔️ Validation report saved: {report_path}")
+        return report
     
-    # --- LOGIC RESTORED ---
     def run(self):
         """Execute full pipeline"""
         try:
-            # Try to load checkpoint first
             checkpoint_loaded = self.load_latest_checkpoint()
         
             if checkpoint_loaded:
@@ -827,10 +869,8 @@ class WikipediaEmbeddingsPipeline:
                 self.logger.info("RESUMING FROM CHECKPOINT")
                 self.logger.info("=" * 80)
             else:
-                # No checkpoint - create new index
                 self.index_builder._init_index()
             
-            # Initialize validator AFTER index is ready
             self.validator = ValidationSuite(self.config, self.index_builder, self.logger)
         
             # Phase 2: Full processing
@@ -840,12 +880,12 @@ class WikipediaEmbeddingsPipeline:
             self.run_optimization_phase()
             
             # Phase 4: Final validation
-            self.run_final_validation_phase()
+            report = self.run_final_validation_phase()
             
             # Save final index
             self.index_builder.save_final()
             
-            self._print_summary()
+            self._print_summary(report)
             
             return True
 
@@ -853,18 +893,21 @@ class WikipediaEmbeddingsPipeline:
             self.logger.error(f"Pipeline failed: {e}", exc_info=True)
             return False
     
-    def _print_summary(self):
+    def _print_summary(self, report: dict):
         self.logger.info("=" * 80)
         self.logger.info("PIPELINE COMPLETE!")
         self.logger.info("=" * 80)
-        total_time = time.time() - self.stats["start_time"]
-        articles = self.stats["articles_processed"]
+        total_time = report["pipeline_stats"]["total_time_seconds"]
+        articles = report["total_articles"]
         self.logger.info(f"Total articles: {articles:,}")
-        self.logger.info(f"Total time: {total_time/60:.2f} minutes")
+        self.logger.info(f"Total time: {total_time/3600:.2f} hours")
+        self.logger.info(f"Throughput: {articles/(total_time/60):.0f} articles/min")
+        self.logger.info(f"Search latency: {report['search_latency_ms']['mean']:.2f}ms")
         self.logger.info("")
         self.logger.info(f"Output directory: {self.config.output_dir}")
-        self.logger.info(f" - index.faiss")
-        self.logger.info(f" - metadata.db")
+        self.logger.info(f"  - index.faiss")
+        self.logger.info(f"  - metadata.db")
+        self.logger.info(f"  - validation_report.json")
 
 # ============================================================================
 # ENTRY POINT
@@ -877,13 +920,12 @@ def main():
     
     config = Config()
     
-    # Create local dirs
     Path(config.output_dir).mkdir(parents=True, exist_ok=True)
     Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
     
     if not any(Path(config.xml_chunk_dir).glob("*.xml*")):
         print(f"ERROR: No XML files found in {config.xml_chunk_dir}")
-        print(f"Please put your .xml or .xml.bz2 file in {config.xml_chunk_dir}")
+        print("Please put your .xml or .xml.bz2 file(s) in that directory.")
         sys.exit(1)
     
     pipeline = WikipediaEmbeddingsPipeline(config)
@@ -892,6 +934,5 @@ def main():
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
-    # 'spawn' is safer, especially on macOS
     torch.multiprocessing.set_start_method('spawn', force=True) 
     main()
