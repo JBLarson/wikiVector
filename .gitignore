@@ -28,3 +28,12 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+.bash_history
+.bash_logout
+.bashrc
+.cache/
+.config/
+.lesshst
+.profile
+.ssh/
