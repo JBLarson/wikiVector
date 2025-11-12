@@ -386,7 +386,7 @@ def load_latest_checkpoint(config: Config, logger: logging.Logger) -> Tuple[str,
     
     # This is the critical step: copy the checkpoint DB to the final output path
     # The FAISSIndexBuilder will then open this copied file
-    working_db = config.output_dir / "metadata.db"
+    working_db = Path(config.output_dir) / "metadata.db"
     logger.info(f"Copying metadata DB from checkpoint to {working_db}")
     shutil.copy2(checkpoint_db, working_db)
     
