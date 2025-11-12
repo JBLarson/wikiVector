@@ -44,7 +44,7 @@ class Config:
     """System configuration parameters"""
     
     # --- PRODUCTION PATHS ---
-    xml_chunk_dir: str = "/mnt/data/wikipedia/raw/" 
+    xml_chunk_dir: str = "/mnt/data/wikipedia/raw/xml_chunks" 
     output_dir: str = "/mnt/data/wikipedia/embeddings/"
     checkpoint_dir: str = "/mnt/data/wikipedia/checkpoints/"
     
@@ -399,36 +399,6 @@ class FAISSIndexBuilder:
         
         self.metadata_db.commit()
     
-    def _save_checkpoint(self):
-            """Save progress checkpoint and prune old ones"""
-            checkpoint_dir = Path(self.config.checkpoint_dir)
-            checkpoint_name = f"checkpoint_{self.stats['articles_processed']:09d}"
-            checkpoint_path = checkpoint_dir / checkpoint_name
-            
-            # --- Save the new checkpoint ---
-            self.index_builder.save_checkpoint(checkpoint_path, self.stats)
-            self.stats["checkpoints_saved"] += 1
-            
-            # --- NEW LOGIC: Prune old checkpoints ---
-            try:
-                # Get all checkpoint directories, sorted alphabetically by name
-                # (e.g., checkpoint_001, checkpoint_002)
-                checkpoints = sorted(checkpoint_dir.glob("checkpoint_*"))
-                
-                # Keep only the 3 most recent
-                if len(checkpoints) > 3:
-                    # Get all checkpoints *except* the last 3
-                    checkpoints_to_delete = checkpoints[:-3]
-                    self.logger.info(f"Pruning {len(checkpoints_to_delete)} old checkpoints...")
-                    
-                    for old_checkpoint in checkpoints_to_delete:
-                        self.logger.warning(f"Deleting old checkpoint: {old_checkpoint.name}")
-                        # Recursively delete the entire directory
-                        shutil.rmtree(old_checkpoint)
-                        
-            except Exception as e:
-                self.logger.error(f"Failed to prune old checkpoints: {e}")
-
     # ======================================================
     # --- PATCHED OPTIMIZE FUNCTION ---
     # ======================================================
@@ -831,13 +801,47 @@ class WikipediaEmbeddingsPipeline:
             pbar.update(len(filtered_articles))
 
     def _save_checkpoint(self):
-        """Save progress checkpoint"""
-        checkpoint_dir = Path(self.config.checkpoint_dir)
-        checkpoint_name = f"checkpoint_{self.stats['articles_processed']:09d}"
-        checkpoint_path = checkpoint_dir / checkpoint_name
-        
-        self.index_builder.save_checkpoint(checkpoint_path, self.stats)
-        self.stats["checkpoints_saved"] += 1
+            """Save progress checkpoint and prune old ones"""
+            checkpoint_dir = Path(self.config.checkpoint_dir)
+            checkpoint_name = f"checkpoint_{self.stats['articles_processed']:09d}"
+            checkpoint_path = checkpoint_dir / checkpoint_name
+            
+            self.logger.info(f"Saving checkpoint: {checkpoint_name}...")
+            
+            try:
+                # 1. Create directory
+                checkpoint_path.mkdir(parents=True, exist_ok=True)
+                
+                # 2. Save FAISS index
+                index_file = checkpoint_path / "index.faiss"
+                faiss.write_index(self.index_builder.index, str(index_file))
+                
+                # 3. Save stats
+                stats_file = checkpoint_path / "stats.json"
+                with open(stats_file, 'w') as f:
+                    json.dump(self.stats, f, indent=2)
+                    
+                # 4. Save metadata DB (by copying the live file)
+                # Ensure DB changes are committed before copy
+                self.index_builder.metadata_db.commit() 
+                db_file = self.index_builder.db_path
+                shutil.copy2(db_file, checkpoint_path / "metadata.db")
+                
+                self.logger.info(f"Checkpoint {checkpoint_name} saved successfully.")
+                
+                # 5. Prune old checkpoints
+                checkpoints = sorted(checkpoint_dir.glob("checkpoint_*"))
+                if len(checkpoints) > 3: # Keep only the 3 most recent
+                    checkpoints_to_delete = checkpoints[:-3]
+                    self.logger.info(f"Pruning {len(checkpoints_to_delete)} old checkpoints...")
+                    for old_checkpoint in checkpoints_to_delete:
+                        self.logger.warning(f"Deleting old checkpoint: {old_checkpoint.name}")
+                        shutil.rmtree(old_checkpoint)
+                        
+            except Exception as e:
+                self.logger.error(f"Failed to save or prune checkpoint: {e}", exc_info=True)
+                
+            self.stats["checkpoints_saved"] += 1
     
     def run_optimization_phase(self):
         self.logger.info("=" * 80)
