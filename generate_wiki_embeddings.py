@@ -412,35 +412,41 @@ class FAISSIndexBuilder:
             self.logger.warning(f"Too few vectors ({n_vectors}) for optimization, keeping flat index")
             return
 
-        self.logger.info(f"Fetching {n_vectors} article IDs from DB...")
-        cursor = self.metadata_db.cursor()
+        self.logger.info(f"Reconstructing {n_vectors} vectors from flat index...")
         
-        db_ids = set(row[0] for row in cursor.execute("SELECT article_id FROM articles"))
-        index_ids = faiss.vector_to_array(self.index.id_map)
-        
-        ids_in_both = [id for id in index_ids if id in db_ids]
-        n_vectors = len(ids_in_both)
-        ids = np.array(ids_in_both, dtype=np.int64)
-        
-        if n_vectors < 1000:
-             self.logger.warning(f"Too few vectors in common ({n_vectors}) for optimization.")
-             return
-        
-        self.logger.info(f"Found {n_vectors} vectors common to DB and Index.")
+        # --- START FIX ---
+        # The original code tried to reconstruct from self.index (the IDMap),
+        # which is not supported.
+        # The correct way is to reconstruct from self.index.index (the FlatIndex)
+        # using the *internal* 0-based IDs.
 
+        # 1. Reconstruct all vectors from the underlying flat index
         vectors = np.zeros((n_vectors, self.config.embedding_dim), dtype=np.float32)
-        self.logger.info("Reconstructing all vectors from flat index...")
-        for i, article_id in enumerate(tqdm(ids, desc="Reconstructing vectors")):
+        for i in tqdm(range(n_vectors), desc="Reconstructing vectors"):
             try:
-                vectors[i] = self.index.reconstruct(int(article_id))
+                vectors[i] = self.index.index.reconstruct(i)
             except Exception as e:
-                self.logger.error(f"Failed to reconstruct {article_id}: {e}")
+                self.logger.error(f"Failed to reconstruct internal index {i}: {e}")
                 raise
+        
+        # 2. Get the corresponding *external* article_ids
+        #    self.index.id_map contains the external_id at the internal_id's position
+        self.logger.info("Fetching all article IDs from index map...")
+        ids = faiss.vector_to_array(self.index.id_map)
+        
+        # Safety check
+        if len(ids) != n_vectors:
+            self.logger.error(f"FATAL: Vector count ({n_vectors}) and ID count ({len(ids)}) mismatch!")
+            return
+        
+        self.logger.info("All vectors and IDs reconstructed.")
+        # --- END FIX ---
         
         self.logger.info("All vectors reconstructed. Training new index...")
 
         n_clusters = int(np.sqrt(n_vectors))
-        n_clusters = min(n_clusters, max(1, n_vectors // 39))
+        # Ensure n_clusters is valid for IVF
+        n_clusters = max(1, min(n_clusters, n_vectors // 39))
         if n_clusters < 1: n_clusters = 1
         
         self.logger.info(f"Training IVF with {n_clusters} clusters...")
@@ -450,18 +456,20 @@ class FAISSIndexBuilder:
             quantizer,
             self.config.embedding_dim,
             n_clusters,
-            64,
-            8
+            64,  # 64 sub-quantizers
+            8    # 8 bits per sub-quantizer
         )
         
         index_ivf.train(vectors)
         self.logger.info("Training complete.")
 
         self.logger.info("Creating new optimized IndexIDMap2...")
+        # IndexIDMap2 is for mapping external IDs to IVF indexes
         new_index = faiss.IndexIDMap2(index_ivf)
         
         new_index.add_with_ids(vectors, ids)
         
+        # Set nprobe for search (how many clusters to check)
         ivf_index_cast = faiss.downcast_index(new_index.index)
         ivf_index_cast.nprobe = min(32, n_clusters)
         
