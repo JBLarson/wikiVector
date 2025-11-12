@@ -176,8 +176,8 @@ def chunk_wikipedia_xml(
 
 if __name__ == "__main__":
     chunk_wikipedia_xml(
-        input_file="/mnt/data-large/wikipedia/raw/enwiki-20251101-pages-articles-multistream.xml",
-        output_dir="/mnt/data-large/wikipedia/raw/xml_chunks/",
+        input_file="/mnt/data/wikipedia/raw/enwiki-20251101-pages-articles-multistream.xml",
+        output_dir="/mnt/data/wikipedia/raw/xml_chunks/",
         pages_per_chunk=10000,
         num_workers=16  # Use 16 workers for max write parallelism
     )
