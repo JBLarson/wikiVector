@@ -20,22 +20,72 @@ from sentence_transformers import SentenceTransformer
 # --- CONFIGURATION ---
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # Base directory where all checkpoints are saved
-CHECKPOINT_DIR = Path("./data/checkpoints")
+CHECKPOINT_DIR = Path("/mnt/data/wikipedia/checkpoints")
 TOP_K = 5 # How many results to fetch for each query
 
 # --- VALIDATION QUERIES ---
 # (Query Text, [List of expected article titles])
-# Add more queries as your script processes more of the alphabet
 QUERIES = [
+    # Religion & Philosophy
     ("Tibetan Buddhism", ["Dalai_Lama"]),
-    ("natural catastrophe", ["Disaster"]),
-    ("Italian soccer goalie", ["Dino_Zoff"]),
-    ("part of a brain cell", ["Dendrite"]),
-    ("regional language differences", ["Dialect"]),
+    ("Christian sacrament of body and blood", ["Eucharist"]),
+    ("Islamic pilgrimage to Mecca", ["Hajj"]),
+    ("Greek philosophy of virtue ethics", ["Aristotle"]),
+    ("Zen Buddhist meditation practice", ["Zazen"]),
+    
+    # Science & Medicine
     ("heart medication", ["Digitalis"]),
+    ("part of a brain cell", ["Dendrite"]),
+    ("theory of evolution by natural selection", ["Charles_Darwin"]),
+    ("double helix molecule of heredity", ["DNA"]),
+    ("subatomic particle with negative charge", ["Electron"]),
+    ("speed of light constant", ["Speed_of_light"]),
+    ("greenhouse gas climate change", ["Carbon_dioxide"]),
+    
+    # Geography & Places
+    ("capital of France", ["Paris"]),
+    ("largest desert in the world", ["Sahara", "Antarctic"]),
+    ("mountain range between Europe and Asia", ["Ural_Mountains"]),
+    ("ancient wonder Great Pyramid", ["Great_Pyramid_of_Giza"]),
+    
+    # History & Events
+    ("French Revolution guillotine", ["French_Revolution"]),
+    ("World War II atomic bomb Japan", ["Atomic_bombings_of_Hiroshima_and_Nagasaki"]),
+    ("American Civil War president", ["Abraham_Lincoln"]),
+    ("moon landing 1969", ["Apollo_11"]),
+    
+    # Arts & Literature
     ("comic strip about office life", ["Dilbert"]),
-    ("Greek alphabet letter", ["Digamma"]),
+    ("Shakespeare tragedy Danish prince", ["Hamlet"]),
+    ("Mona Lisa painter Renaissance", ["Leonardo_da_Vinci"]),
+    ("jazz trumpet player from New Orleans", ["Louis_Armstrong"]),
+    ("British rock band Liverpool 1960s", ["The_Beatles"]),
+    
+    # Technology & Computing
+    ("invented World Wide Web", ["Tim_Berners-Lee"]),
+    ("programming language named after snake", ["Python_(programming_language)"]),
+    ("open source operating system kernel", ["Linux"]),
+    ("iPhone creator company", ["Apple_Inc."]),
+    
+    # Sports
+    ("Italian soccer goalie", ["Dino_Zoff"]),
+    ("Olympic games ancient Greece", ["Olympic_Games"]),
+    ("basketball league NBA", ["National_Basketball_Association"]),
+    ("world cup football tournament", ["FIFA_World_Cup"]),
+    
+    # Language & Communication
+    ("regional language differences", ["Dialect"]),
+    ("Greek alphabet letter", ["Digamma", "Alpha", "Delta"]),
+    ("Latin-derived language spoken in France", ["French_language"]),
+    ("sign language for the deaf", ["Sign_language"]),
+    
+    # General Concepts
+    ("natural catastrophe", ["Disaster"]),
     ("money for wrongdoing", ["Damages"]),
+    ("government by the people", ["Democracy"]),
+    ("fear of enclosed spaces", ["Claustrophobia"]),
+    ("study of ancient civilizations", ["Archaeology"]),
+    ("theory of relativity physicist", ["Albert_Einstein"]),
 ]
 
 def main():
