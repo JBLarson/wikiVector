@@ -11,10 +11,22 @@ import faiss
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
+import os
+
+# --- 1. CRITICAL FIX for macOS (Part A) ---
+# Disables tokenizer parallelism to prevent segfaults
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# --- 2. CRITICAL FIX for macOS (Part B) ---
+# Forces 'spawn' start method for multiprocessing to prevent
+# segfaults and "leaked semaphore" warnings from PyTorch/fork.
+# This MUST be in the 'if __name__ == "__main__":' block.
+
 
 # --- Configuration ---
-DB_PATH = "/mnt/data-large/wikipedia/embeddings/wikipedia_metadata.db"
-INDEX_PATH = "/mnt/data-large/wikipedia/checkpoints/checkpoint_03921034/index.faiss"
+# local
+DB_PATH = "data/embeddings/metadata.db"
+INDEX_PATH = "data/embeddings/index.faiss"
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 TOP_K = 5 # Number of results to return
 # ---------------------
@@ -37,24 +49,32 @@ def search(query_string: str):
         # --- 2. Load Model ---
         print(f"Loading sentence transformer model: {MODEL_NAME}...")
         start_time = time.time()
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
+        # Auto-detect Mac Apple Silicon (MPS)
+        if torch.backends.mps.is_available():
+            device = "mps"
+        elif torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"
+            
         model = SentenceTransformer(MODEL_NAME, device=device)
-        print(f"Model loaded to {device} in {time.time() - start_time:.2f}s")
+        print(f"Model loaded to {device.upper()} in {time.time() - start_time:.2f}s")
 
         # --- 3. Load FAISS Index ---
         print(f"Loading FAISS index: {INDEX_PATH}...")
         start_time = time.time()
         index = faiss.read_index(INDEX_PATH)
-        # If you're on a GPU instance, move the index to the GPU
-        if device == 'cuda':
-            try:
-                res = faiss.StandardGpuResources()
-                index = faiss.index_cpu_to_gpu(res, 0, index)
-                print("Index moved to GPU.")
-            except Exception as e:
-                print(f"Could not move index to GPU, using CPU. Error: {e}")
         
-        print(f"Index loaded in {time.time() - start_time:.2f}s")
+        # Set nprobe if the index is IVF (optimized)
+        try:
+            ivf_index = faiss.downcast_index(index.index) 
+            ivf_index.nprobe = 16
+            print(f"Index is IndexIDMap(IVF). Set nprobe = {ivf_index.nprobe}")
+        except:
+            print("Index is Flat. nprobe not applicable.")
+            
+        print(f"Index loaded in {time.time() - start_time:.2f}s (Total vectors: {index.ntotal})")
         
         # --- 4. Connect to Metadata DB ---
         print(f"Connecting to metadata DB: {DB_PATH}...")
@@ -112,6 +132,10 @@ def search(query_string: str):
             print("Database connection closed.")
 
 if __name__ == "__main__":
+    # --- ADD THIS LINE ---
+    # Apply the multiprocessing fix (must be inside __name__ == "__main__")
+    torch.multiprocessing.set_start_method('spawn', force=True) 
+    
     # Get the query string from all command-line arguments joined together
     query = " ".join(sys.argv[1:])
     search(query)
