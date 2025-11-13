@@ -20,7 +20,7 @@ from sentence_transformers import SentenceTransformer
 # --- CONFIGURATION ---
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # Base directory where all checkpoints are saved
-CHECKPOINT_DIR = Path("/mnt/data/wikipedia/checkpoints")
+CHECKPOINT_DIR = Path("/mnt/data/wikipedia/embeddings")
 TOP_K = 5 # How many results to fetch for each query
 
 # --- VALIDATION QUERIES ---
