@@ -88,7 +88,7 @@ aria2c -x 16 -s 16 "https://dumps.wikimedia.org/enwiki/20251101/enwiki-20251101-
 
 ## Stage Two - Enhance Vector DB
 
-
+getPagePagelinks.py - Download and decompress page and pagelinks Wiki dumps
 
 processPage.py - Process enwiki-latest-page.sql (output temp_wiki.db)
 
