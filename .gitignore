@@ -6,6 +6,9 @@ data
 *.gz
 
 # Python
+
+s2Env/
+
 wvEnv/
 __pycache__/
 *.py[cod]

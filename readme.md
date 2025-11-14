@@ -1,5 +1,12 @@
 # Wikipedia Embeddings Generation System
-## Production-Grade Pipeline
+
+
+The code for pages_articles is a distinct system processing the largest dump, I used a GCP VM with a Tesla 4 to decrease job time from days (with my laptop) to hours, in November 2025 it cost me ~$14 and took several hours.
+
+
+### Stage One - pages_articles
+
+
 
 ### Overview
 This system generates semantic embeddings for all 6.9M English Wikipedia articles using a production-optimized pipeline with:
@@ -59,6 +66,17 @@ graph LR
     class P,Q,R script
     class G,H,I,K output
 ```
+
+
+
+
+
+#### Download Wiki dump
+
+aria2c -x 16 -s 16 "https://dumps.wikimedia.org/enwiki/20251101/enwiki-20251101-pages-articles-multistream.xml.bz2"
+
+
+
 ### Key Features
 
 - **Resume Capability**: Automatic checkpoint detection and resume from last saved state
@@ -68,8 +86,14 @@ graph LR
 - **Fault Tolerant**: Checkpoint every 100K articles + graceful interrupt handling
 
 
-### Misc
+## Stage Two - Enhance Vector DB
 
-- Download Wiki dump
+prepDb.py
 
-aria2c -x 16 -s 16 "https://dumps.wikimedia.org/enwiki/20251101/enwiki-20251101-pages-articles-multistream.xml.bz2"
+getPageviews.py
+
+processPageviews.py
+
+processPagelinks.py
+
+
