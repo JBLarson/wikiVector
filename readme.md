@@ -77,7 +77,7 @@ aria2c -x 16 -s 16 "https://dumps.wikimedia.org/enwiki/20251101/enwiki-20251101-
 
 
 
-### Key Features
+### Features
 
 - **Resume Capability**: Automatic checkpoint detection and resume from last saved state
 - **Memory Efficient**: Streaming XML parsing with element cleanup prevents OOM
@@ -94,10 +94,9 @@ processPage.py - Process enwiki-latest-page.sql (output temp_wiki.db)
 
 processPagelinks.py - Process enwiki-latest-pagelinks.sql (output temp_wiki.db)
 
-
-
 prepDb.py - Post-processing vector db update(s)
 
+#### Execution dependent on having processed page / pagelinks dumps
 mergeTemp.py - Merge temp_wiki.db values with prepped metadata.db
 
 getPageviews.py - Retrieve ~30 daily pageviews dumps for last full month (hardcoded to October 2025)
