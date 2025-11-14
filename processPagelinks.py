@@ -14,11 +14,25 @@ def parse_sql_inserts(file_path, value_processor, batch_size=10000):
     insert_pattern = re.compile(r'INSERT INTO `\w+` VALUES (.+);', re.DOTALL)
     
     batch = []
+    lines_processed = 0
+    last_update = time.time()
+    
+    file_size = os.path.getsize(file_path)
     
     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
         buffer = ''
+        bytes_read = 0
         
         for line in f:
+            bytes_read += len(line.encode('utf-8'))
+            lines_processed += 1
+            
+            current_time = time.time()
+            if current_time - last_update >= 1.0:
+                percent = (bytes_read / file_size) * 100
+                print(f"  Parsing: {percent:.1f}% ({lines_processed:,} lines)", end='\r')
+                last_update = current_time
+            
             if line.startswith('INSERT INTO'):
                 buffer = line
             elif buffer:
@@ -96,18 +110,17 @@ def parse_value_tuples(values_str):
     return rows
 
 def process_pagelinks_row(row):
-    """Extract (pl_from, pl_namespace, pl_title, pl_from_namespace) from row"""
-    if len(row) < 4:
+    """Extract (pl_from, pl_from_namespace, pl_target_id) from row"""
+    if len(row) < 3:
         return None
     
     try:
         pl_from = int(row[0])
-        namespace = int(row[1])
-        title = row[2].strip("'")
-        pl_from_namespace = int(row[3])
+        pl_from_namespace = int(row[1])
+        pl_target_id = int(row[2])
         
-        if namespace == 0:  # Only links to main namespace
-            return (pl_from, namespace, title, pl_from_namespace)
+        # Import all links - we'll filter during JOIN
+        return (pl_from, pl_from_namespace, pl_target_id)
     except (ValueError, IndexError):
         pass
     
@@ -123,71 +136,91 @@ def add_pagelinks_table():
     conn = sqlite3.connect(TEMP_DB_PATH)
     cursor = conn.cursor()
     
-    # Check if pagelinks table already exists
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pagelinks'")
     if cursor.fetchone():
         print("Warning: pagelinks table already exists. Dropping and recreating...")
         cursor.execute("DROP TABLE pagelinks")
     
+    # Match the actual Wikipedia schema
     cursor.execute("""
         CREATE TABLE pagelinks (
             pl_from INTEGER,
-            pl_namespace INTEGER,
-            pl_title TEXT,
-            pl_from_namespace INTEGER
+            pl_from_namespace INTEGER,
+            pl_target_id INTEGER
         )
     """)
     
     conn.commit()
     conn.close()
-    print(f"Added pagelinks table to {TEMP_DB_PATH}")
+    print(f"Created pagelinks table in {TEMP_DB_PATH}")
 
 def process_pagelinks():
     print("Starting pagelinks processor...")
+    print(f"File: {PAGELINKS_SQL_PATH}")
+    
+    file_size = os.path.getsize(PAGELINKS_SQL_PATH)
+    file_size_gb = file_size / (1024**3)
+    print(f"File size: {file_size_gb:.2f} GB")
+    
     total_start_time = time.time()
     
     conn = None
     
     try:
-        # Add pagelinks table to existing database
         add_pagelinks_table()
         
         conn = sqlite3.connect(TEMP_DB_PATH)
         cursor = conn.cursor()
         
-        # Import pagelinks data
-        print(f"Importing {PAGELINKS_SQL_PATH}...")
-        print("This will take several hours...")
+        print(f"\nPhase 1: Parsing and importing pagelinks...")
+        print("This will take 2-4 hours...")
         start_time = time.time()
         total_links = 0
+        batch_count = 0
         
         for batch in parse_sql_inserts(PAGELINKS_SQL_PATH, process_pagelinks_row):
-            cursor.executemany("INSERT INTO pagelinks VALUES (?, ?, ?, ?)", batch)
+            cursor.executemany("INSERT INTO pagelinks VALUES (?, ?, ?)", batch)
             total_links += len(batch)
-            elapsed = time.time() - start_time
+            batch_count += 1
+            
+            if batch_count % 100 == 0:
+                conn.commit()
+            
+            current_time = time.time()
+            elapsed = current_time - start_time
             rate = total_links / elapsed if elapsed > 0 else 0
-            print(f"  Imported {total_links:,} links ({rate:,.0f}/sec)...", end='\r')
+            
+            if total_links > 100000:
+                estimated_total = 550_000_000
+                eta_seconds = (estimated_total - total_links) / rate if rate > 0 else 0
+                eta_hours = eta_seconds / 3600
+                print(f"  Imported {total_links:,} links @ {rate:,.0f}/sec (ETA: {eta_hours:.1f}h)    ", end='\r')
+            else:
+                print(f"  Imported {total_links:,} links @ {rate:,.0f}/sec    ", end='\r')
         
         conn.commit()
-        print(f"\nImported {total_links:,} links in {time.time() - start_time:.2f}s")
+        elapsed = time.time() - start_time
+        print(f"\n\nPhase 1 complete: Imported {total_links:,} links in {elapsed/60:.1f} minutes")
         
-        # Create index
-        print("Creating index on pagelinks table...")
+        print("\nPhase 2: Creating index...")
+        print("This will take 10-20 minutes...")
         start_time = time.time()
-        cursor.execute("CREATE INDEX idx_pagelinks_target ON pagelinks(pl_namespace, pl_title)")
+        # Index on target_id since we'll be joining on page_id
+        cursor.execute("CREATE INDEX idx_pagelinks_target ON pagelinks(pl_target_id)")
         conn.commit()
-        print(f"Index created in {time.time() - start_time:.2f}s")
+        elapsed = time.time() - start_time
+        print(f"Index created in {elapsed/60:.1f} minutes")
         
-        # Show stats
-        cursor.execute("SELECT COUNT(*) FROM pagelinks WHERE pl_namespace = 0")
-        count = cursor.fetchone()[0]
-        print(f"\nTotal links to main namespace: {count:,}")
+        cursor.execute("SELECT COUNT(*) FROM pagelinks")
+        total_count = cursor.fetchone()[0]
+        print(f"\nTotal pagelinks imported: {total_count:,}")
         
-        print(f"\nPagelinks processing complete in {time.time() - total_start_time:.2f}s")
+        total_elapsed = time.time() - total_start_time
+        print(f"Total processing time: {total_elapsed/3600:.2f} hours")
         print(f"Output: {TEMP_DB_PATH}")
 
     except Exception as e:
-        print(f"\nAn error occurred: {e}", file=sys.stderr)
+        print(f"\n[ERROR] {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
         if conn:

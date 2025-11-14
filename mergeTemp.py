@@ -54,12 +54,7 @@ def compute_backlinks():
             SET backlinks = (
                 SELECT COUNT(*)
                 FROM wiki.pagelinks pl
-                INNER JOIN wiki.page p 
-                    ON pl.pl_title = p.page_title 
-                    AND pl.pl_namespace = p.page_namespace
-                WHERE p.page_id = articles.article_id
-                    AND p.page_namespace = 0
-                    AND pl.pl_namespace = 0
+                WHERE pl.pl_target_id = articles.article_id
             )
         """)
         
