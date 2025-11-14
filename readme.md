@@ -88,12 +88,21 @@ aria2c -x 16 -s 16 "https://dumps.wikimedia.org/enwiki/20251101/enwiki-20251101-
 
 ## Stage Two - Enhance Vector DB
 
-prepDb.py
 
-getPageviews.py
 
-processPageviews.py
+processPage.py - Process enwiki-latest-page.sql (output temp_wiki.db)
 
-processPagelinks.py
+processPagelinks.py - Process enwiki-latest-pagelinks.sql (output temp_wiki.db)
+
+
+
+prepDb.py - Post-processing vector db update(s)
+
+mergeTemp.py - Merge temp_wiki.db values with prepped metadata.db
+
+getPageviews.py - Retrieve ~30 daily pageviews dumps for last full month (hardcoded to October 2025)
+
+processPageviews.py - Process dumps from data/pageviews directory
+
 
 
