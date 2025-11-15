@@ -4,7 +4,7 @@ import sys
 import os
 
 # --- CONFIG ---
-DB_PATH = "data/embeddings/metadata.db"
+DB_PATH = "data/metadata.db"
 TEMP_DB_PATH = "data/temp_wiki.db"
 # ----------------
 
