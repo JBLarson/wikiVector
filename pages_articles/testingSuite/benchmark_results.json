@@ -1,0 +1,81 @@
+{
+  "results": [
+    {
+      "name": "Query Type: exact_title",
+      "num_queries": 50,
+      "total_time": 0.16393589973449707,
+      "qps": 304.99725856860925,
+      "avg_latency": 3.235049247741699,
+      "p50_latency": 3.1328201293945312,
+      "p95_latency": 4.1351318359375,
+      "p99_latency": 5.041837692260742,
+      "success_rate": 0.0
+    },
+    {
+      "name": "Query Type: natural_language",
+      "num_queries": 50,
+      "total_time": 2.7301230430603027,
+      "qps": 18.314192881194476,
+      "avg_latency": 54.551286697387695,
+      "p50_latency": 52.9632568359375,
+      "p95_latency": 71.85506820678711,
+      "p99_latency": 78.86004447937012,
+      "success_rate": 1.0
+    },
+    {
+      "name": "Query Type: short_queries",
+      "num_queries": 50,
+      "total_time": 2.255064010620117,
+      "qps": 22.17231961688332,
+      "avg_latency": 45.051140785217285,
+      "p50_latency": 51.709890365600586,
+      "p95_latency": 76.43485069274902,
+      "p99_latency": 83.39786529541016,
+      "success_rate": 0.8
+    },
+    {
+      "name": "Query Type: long_queries",
+      "num_queries": 30,
+      "total_time": 3.294806718826294,
+      "qps": 9.10523820064531,
+      "avg_latency": 109.77280139923096,
+      "p50_latency": 47.17397689819336,
+      "p95_latency": 925.5387783050537,
+      "p99_latency": 1028.2142162322998,
+      "success_rate": 1.0
+    },
+    {
+      "name": "Sequential (50 queries)",
+      "num_queries": 50,
+      "total_time": 0.43828725814819336,
+      "qps": 114.0804325712203,
+      "avg_latency": 8.717913627624512,
+      "p50_latency": 3.2858848571777344,
+      "p95_latency": 54.792165756225586,
+      "p99_latency": 70.52397727966309,
+      "success_rate": 0.1
+    },
+    {
+      "name": "Concurrent 5 workers",
+      "num_queries": 50,
+      "total_time": 0.3050811290740967,
+      "qps": 163.89083176578987,
+      "avg_latency": 26.58583164215088,
+      "p50_latency": 7.205963134765625,
+      "p95_latency": 180.17911911010742,
+      "p99_latency": 195.76382637023926,
+      "success_rate": 0.14
+    },
+    {
+      "name": "Concurrent 10 workers",
+      "num_queries": 50,
+      "total_time": 0.2883131504058838,
+      "qps": 173.42254395822945,
+      "avg_latency": 49.54090595245361,
+      "p50_latency": 14.078855514526367,
+      "p95_latency": 230.62705993652344,
+      "p99_latency": 244.24314498901367,
+      "success_rate": 0.18
+    }
+  ]
+}

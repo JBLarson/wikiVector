@@ -1,0 +1,1157 @@
+{
+  "summary": {
+    "total_tests": 31,
+    "passed": 17,
+    "avg_recall": 0.3010752688172043,
+    "avg_latency_ms": 65.96109174912975
+  },
+  "tests": [
+    {
+      "query": "Python_(programming_language)",
+      "category": "Exact Match",
+      "success": false,
+      "found_results": [],
+      "expected_results": [
+        "Python",
+        "Programming",
+        "Guido"
+      ],
+      "latency_ms": 5.166769027709961,
+      "recall": 0.0,
+      "top_result": "",
+      "scores": []
+    },
+    {
+      "query": "Machine_learning",
+      "category": "Exact Match",
+      "success": false,
+      "found_results": [],
+      "expected_results": [
+        "Machine learning",
+        "Artificial intelligence",
+        "Deep learning"
+      ],
+      "latency_ms": 4.907846450805664,
+      "recall": 0.0,
+      "top_result": "",
+      "scores": []
+    },
+    {
+      "query": "programming language created by Guido van Rossum",
+      "category": "Natural Language",
+      "success": false,
+      "found_results": [
+        "Guido_van_Rossum",
+        "Programmation_Automatique_des_Formules",
+        "SASL_(programming_language)",
+        "GEORGE_(programming_language)",
+        "Programming_Languages:_History_and_Fundamentals",
+        "SMALL",
+        "Speedcoding",
+        "Polymorphic_Programming_Language",
+        "Superplan",
+        "Miranda_(programming_language)",
+        "SuperPascal",
+        "Bosque_(programming_language)"
+      ],
+      "expected_results": [
+        "Python"
+      ],
+      "latency_ms": 54.71611022949219,
+      "recall": 0.0,
+      "top_result": "Guido_van_Rossum",
+      "scores": [
+        27,
+        23,
+        22,
+        22,
+        21,
+        20,
+        20,
+        19,
+        18,
+        17,
+        17,
+        17
+      ]
+    },
+    {
+      "query": "ancient wonder great pyramid egypt",
+      "category": "Natural Language",
+      "success": true,
+      "found_results": [
+        "Pyramid_G1-a",
+        "Pyramid_G1-b",
+        "Giza_pyramid_complex",
+        "Great_Pyramid_of_Giza",
+        "Lepsius_I_Pyramid",
+        "Mark_Lehner",
+        "Pyramid_G3-a",
+        "Pyramid_G3-c",
+        "Red_Pyramid",
+        "Pyramid_G2-a",
+        "Egyptian_pyramids",
+        "Pyramid_G1-c"
+      ],
+      "expected_results": [
+        "Great Pyramid",
+        "Giza",
+        "Egypt"
+      ],
+      "latency_ms": 170.93992233276367,
+      "recall": 0.6666666666666666,
+      "top_result": "Pyramid_G1-a",
+      "scores": [
+        32,
+        28,
+        26,
+        25,
+        22,
+        21,
+        20,
+        20,
+        20,
+        20,
+        19,
+        19
+      ]
+    },
+    {
+      "query": "playwright who wrote Hamlet and Romeo and Juliet",
+      "category": "Natural Language",
+      "success": true,
+      "found_results": [
+        "Hamlet",
+        "Shakespeare_(book)",
+        "Romeo_and_Juliet",
+        "Hamlet's_Father",
+        "Prince_Hamlet",
+        "Hamlet_in_performance",
+        "Literary_influence_of_Hamlet",
+        "&_Juliet",
+        "Outline_of_William_Shakespeare",
+        "Eurydice_(Mallet_play)",
+        "Rosencrantz_and_Guildenstern_Are_Dead",
+        "Shakespeare_in_Love"
+      ],
+      "expected_results": [
+        "Shakespeare",
+        "William Shakespeare"
+      ],
+      "latency_ms": 73.3499526977539,
+      "recall": 0.5,
+      "top_result": "Hamlet",
+      "scores": [
+        23,
+        20,
+        20,
+        20,
+        19,
+        18,
+        18,
+        17,
+        17,
+        17,
+        17,
+        16
+      ]
+    },
+    {
+      "query": "theory of evolution by natural selection",
+      "category": "Natural Language",
+      "success": true,
+      "found_results": [
+        "Evolution",
+        "Gene-centered_view_of_evolution",
+        "Evolution_Without_Selection",
+        "The_Making_of_the_Fittest",
+        "Genetic_drift",
+        "The_Evolution_of_Beauty",
+        "Natural_selection",
+        "A_Mathematical_Theory_of_Natural_and_Artificial_Selection",
+        "Darwinism_(book)",
+        "Evolutionary_invasion_analysis",
+        "Evolutionary_systems",
+        "Evolutionary_dynamics"
+      ],
+      "expected_results": [
+        "Darwin",
+        "Evolution",
+        "Natural selection"
+      ],
+      "latency_ms": 48.40707778930664,
+      "recall": 0.6666666666666666,
+      "top_result": "Evolution",
+      "scores": [
+        27,
+        22,
+        22,
+        21,
+        20,
+        19,
+        18,
+        18,
+        17,
+        17,
+        17,
+        17
+      ]
+    },
+    {
+      "query": "double helix structure of genetic material",
+      "category": "Science",
+      "success": true,
+      "found_results": [
+        "Nucleic_acid_double_helix",
+        "Obsolete_models_of_DNA_structure",
+        "A-DNA",
+        "Molecular_Structure_of_Nucleic_Acids:_A_Structure_for_Deoxyribose_Nucleic_Acid",
+        "Nucleic_acid_tertiary_structure",
+        "Quadruple_helix",
+        "Cruciform_DNA",
+        "DNA2",
+        "Eukaryotic_chromosome_structure",
+        "Triple_helix",
+        "Superhelix",
+        "Structural_motif"
+      ],
+      "expected_results": [
+        "DNA",
+        "Watson",
+        "Crick"
+      ],
+      "latency_ms": 91.55011177062988,
+      "recall": 0.3333333333333333,
+      "top_result": "Nucleic_acid_double_helix",
+      "scores": [
+        20,
+        14,
+        12,
+        12,
+        11,
+        11,
+        5,
+        3,
+        2,
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "query": "Einstein's theory about space and time",
+      "category": "Science",
+      "success": true,
+      "found_results": [
+        "Philosophical_Problems_of_Space_and_Time",
+        "The_Large_Scale_Structure_of_Space\u2013Time",
+        "Container_space",
+        "Theory_of_relativity",
+        "Spacetime",
+        "About_Time_(book)",
+        "Einstein's_Cosmos",
+        "Special_relativity",
+        "The_Nature_of_Space_and_Time",
+        "Relational_space",
+        "J._Richard_Gott",
+        "General_relativity"
+      ],
+      "expected_results": [
+        "Relativity",
+        "Einstein",
+        "General relativity"
+      ],
+      "latency_ms": 75.09779930114746,
+      "recall": 0.6666666666666666,
+      "top_result": "Philosophical_Problems_of_Space_and_Time",
+      "scores": [
+        21,
+        21,
+        20,
+        20,
+        20,
+        19,
+        16,
+        16,
+        15,
+        13,
+        12,
+        12
+      ]
+    },
+    {
+      "query": "subatomic particle with negative charge",
+      "category": "Science",
+      "success": false,
+      "found_results": [
+        "Charged_particle",
+        "Electric_charge",
+        "Negatron",
+        "Truly_neutral_particle",
+        "Positron",
+        "Charge_number",
+        "Antiparticle",
+        "Weak_charge",
+        "Subatomic_particle",
+        "Neutral_particle",
+        "Rutherford_model",
+        "Electric_form_factor"
+      ],
+      "expected_results": [
+        "Electron"
+      ],
+      "latency_ms": 66.67399406433105,
+      "recall": 0.0,
+      "top_result": "Charged_particle",
+      "scores": [
+        21,
+        15,
+        8,
+        7,
+        6,
+        4,
+        3,
+        1,
+        -2,
+        -2,
+        -2,
+        -2
+      ]
+    },
+    {
+      "query": "greenhouse gas causing climate change",
+      "category": "Science",
+      "success": true,
+      "found_results": [
+        "Greenhouse_gas",
+        "Causes_of_climate_change",
+        "Carbon_dioxide_in_the_atmosphere_of_Earth",
+        "Atmospheric_methane",
+        "Greenhouse_effect",
+        "Illustrative_model_of_greenhouse_effect_on_climate_change",
+        "Climate_change_and_agriculture",
+        "Climate_change_in_the_United_States",
+        "Greenhouse_gas_emissions",
+        "Greenhouse_and_icehouse_Earth",
+        "Climate_change_in_Canada",
+        "Atmospheric_carbon_cycle"
+      ],
+      "expected_results": [
+        "Carbon dioxide",
+        "CO2",
+        "Climate"
+      ],
+      "latency_ms": 66.76578521728516,
+      "recall": 0.3333333333333333,
+      "top_result": "Greenhouse_gas",
+      "scores": [
+        34,
+        31,
+        26,
+        21,
+        21,
+        20,
+        19,
+        18,
+        18,
+        17,
+        17,
+        17
+      ]
+    },
+    {
+      "query": "moon landing 1969 Armstrong",
+      "category": "History",
+      "success": false,
+      "found_results": [
+        "Tranquility_Base",
+        "Moon_landing",
+        "Apollo_program",
+        "First_on_the_Moon_(Armstrong,_Collins,_and_Aldrin_book)",
+        "Moon_landing_conspiracy_theories",
+        "Neil_Armstrong",
+        "Exploration_of_the_Moon",
+        "August_1969",
+        "Lunar_Module_Eagle",
+        "Armstrong_Air_&_Space_Museum",
+        "1969_in_science",
+        "Apollo_11_in_popular_culture"
+      ],
+      "expected_results": [
+        "Apollo 11",
+        "Neil Armstrong",
+        "Moon landing"
+      ],
+      "latency_ms": 65.84906578063965,
+      "recall": 0.0,
+      "top_result": "Tranquility_Base",
+      "scores": [
+        24,
+        22,
+        20,
+        19,
+        18,
+        17,
+        15,
+        14,
+        13,
+        12,
+        11,
+        11
+      ]
+    },
+    {
+      "query": "French Revolution guillotine",
+      "category": "History",
+      "success": false,
+      "found_results": [
+        "La_guillotine_permanente",
+        "Pierre_Bourbotte",
+        "Guillaume_Lamberty",
+        "1792_in_France",
+        "Mod\u00e9rantisme",
+        "Pierre_Philippeaux",
+        "Execution_of_Louis_XVI",
+        "Demonstration_of_20_June_1792",
+        "Joseph-Ignace_Guillotin",
+        "Claude-Fran\u00e7ois_de_Payan",
+        "Capital_punishment_in_France",
+        "Jean_Valz"
+      ],
+      "expected_results": [
+        "French Revolution",
+        "Reign of Terror"
+      ],
+      "latency_ms": 75.24585723876953,
+      "recall": 0.0,
+      "top_result": "La_guillotine_permanente",
+      "scores": [
+        30,
+        20,
+        19,
+        19,
+        18,
+        17,
+        17,
+        15,
+        15,
+        14,
+        14,
+        13
+      ]
+    },
+    {
+      "query": "World War II atomic bomb Japan",
+      "category": "History",
+      "success": true,
+      "found_results": [
+        "Atomic_bombings_of_Hiroshima_and_Nagasaki",
+        "Outline_of_World_War_II",
+        "Hiroshima:_BBC_History_of_World_War_II",
+        "Nihon_Hidankyo",
+        "Japan's_non-nuclear_weapons_policy",
+        "Debate_over_the_atomic_bombings_of_Hiroshima_and_Nagasaki",
+        "Japan_during_World_War_II",
+        "Hiroshima_(1995_film)",
+        "The_Atom_Strikes!",
+        "End_of_World_War_II_in_Asia",
+        "Japan_and_weapons_of_mass_destruction",
+        "Bombing_of_Yokkaichi_in_World_War_II"
+      ],
+      "expected_results": [
+        "Hiroshima",
+        "Nagasaki",
+        "Atomic bomb"
+      ],
+      "latency_ms": 80.49988746643066,
+      "recall": 0.6666666666666666,
+      "top_result": "Atomic_bombings_of_Hiroshima_and_Nagasaki",
+      "scores": [
+        31,
+        29,
+        27,
+        26,
+        25,
+        25,
+        24,
+        24,
+        23,
+        23,
+        23,
+        23
+      ]
+    },
+    {
+      "query": "capital of France",
+      "category": "Geography",
+      "success": true,
+      "found_results": [
+        "La_Capitale",
+        "Laval,_Mayenne",
+        "Les_Hauts-de-Caux",
+        "2026_in_France",
+        "8th_arrondissement_of_Paris",
+        "France_1",
+        "6th_arrondissement_of_Paris",
+        "Cap-Ha\u00eftien",
+        "Jules_Cappeliez",
+        "Nantes",
+        "Brassenx",
+        "Paris,_Oregon"
+      ],
+      "expected_results": [
+        "Paris"
+      ],
+      "latency_ms": 47.44386672973633,
+      "recall": 1.0,
+      "top_result": "La_Capitale",
+      "scores": [
+        21,
+        17,
+        17,
+        16,
+        15,
+        15,
+        15,
+        15,
+        14,
+        14,
+        14,
+        14
+      ]
+    },
+    {
+      "query": "largest desert in the world",
+      "category": "Geography",
+      "success": true,
+      "found_results": [
+        "Katpana_Desert",
+        "Mecca,_California",
+        "Dasht-e_Margo",
+        "Arabian_Desert",
+        "Badain_Jaran_Desert",
+        "T\u00e9n\u00e9r\u00e9",
+        "Calansho_Desert",
+        "Dasht-e_Lut",
+        "Chale_Sonbak_Desert",
+        "Great_Sandy\u2013Tanami_desert",
+        "Gobi_Desert",
+        "Aralkum_Desert"
+      ],
+      "expected_results": [
+        "Sahara",
+        "Antarctic",
+        "Desert"
+      ],
+      "latency_ms": 70.26982307434082,
+      "recall": 0.3333333333333333,
+      "top_result": "Katpana_Desert",
+      "scores": [
+        8,
+        6,
+        6,
+        6,
+        4,
+        4,
+        2,
+        2,
+        0,
+        0,
+        -1,
+        -2
+      ]
+    },
+    {
+      "query": "mountain range between Europe and Asia",
+      "category": "Geography",
+      "success": true,
+      "found_results": [
+        "Gora_Alagordy",
+        "Most_isolated_major_summits_of_Europe",
+        "High-mountain_Asia",
+        "Mountains_of_Central_Asia",
+        "Iran_Mountains",
+        "Uly_Balkan",
+        "R\u00e0o_C\u1ecf_Mountain",
+        "Mount_Arlan",
+        "Sauyr_Zhotasy",
+        "T\u00fcrgen",
+        "Likhi_Range",
+        "Markotkh_Range"
+      ],
+      "expected_results": [
+        "Ural",
+        "Mountains"
+      ],
+      "latency_ms": 78.82881164550781,
+      "recall": 0.5,
+      "top_result": "Gora_Alagordy",
+      "scores": [
+        27,
+        26,
+        22,
+        22,
+        19,
+        18,
+        17,
+        17,
+        16,
+        15,
+        15,
+        14
+      ]
+    },
+    {
+      "query": "Mona Lisa painter Renaissance Italy",
+      "category": "Arts",
+      "success": false,
+      "found_results": [
+        "1506_in_art",
+        "Marcia_Hall",
+        "Mona_Lisa",
+        "Mary_de_Piro",
+        "Lisa_del_Giocondo",
+        "Bust_of_a_Princess",
+        "Young_Couple",
+        "Stefano_De_Luigi",
+        "1280s_in_art",
+        "La_Bella_Nani",
+        "Edmondo_Bacci",
+        "Madonna_of_St._Jerome_(Correggio)"
+      ],
+      "expected_results": [
+        "Leonardo da Vinci",
+        "Mona Lisa"
+      ],
+      "latency_ms": 70.6179141998291,
+      "recall": 0.0,
+      "top_result": "1506_in_art",
+      "scores": [
+        40,
+        35,
+        31,
+        29,
+        28,
+        27,
+        26,
+        26,
+        26,
+        25,
+        25,
+        24
+      ]
+    },
+    {
+      "query": "Beatles rock band Liverpool",
+      "category": "Arts",
+      "success": true,
+      "found_results": [
+        "In_Liverpool",
+        "Liverpool_Five",
+        "Music_of_Liverpool",
+        "Outline_of_the_Beatles",
+        "The_Beatles_at_the_Cavern_Club",
+        "Liverpool_Express",
+        "The_Koobas",
+        "The_Beatles",
+        "HELP!_A_Beatles_Tribute",
+        "Liverpool_(We're_Never_Gonna...)",
+        "Mersey_Beat",
+        "Aerial_(Canadian_band)"
+      ],
+      "expected_results": [
+        "Beatles",
+        "Liverpool",
+        "John Lennon"
+      ],
+      "latency_ms": 68.46404075622559,
+      "recall": 0.6666666666666666,
+      "top_result": "In_Liverpool",
+      "scores": [
+        28,
+        26,
+        26,
+        24,
+        21,
+        21,
+        21,
+        20,
+        20,
+        19,
+        19,
+        18
+      ]
+    },
+    {
+      "query": "jazz trumpet player Louis Armstrong",
+      "category": "Arts",
+      "success": true,
+      "found_results": [
+        "Mark_Armstrong_(musician)",
+        "Louis_Cottrell",
+        "Joe_Darensbourg",
+        "George_Orendorff",
+        "Anthony_Harley",
+        "1944_in_jazz",
+        "Bent_Persson",
+        "Peanuts_Holland",
+        "1940_in_jazz",
+        "Louis_Nelson",
+        "Louis_Armstrong_and_His_Hot_Five",
+        "David_Bilger"
+      ],
+      "expected_results": [
+        "Louis Armstrong",
+        "Jazz"
+      ],
+      "latency_ms": 73.99296760559082,
+      "recall": 0.5,
+      "top_result": "Mark_Armstrong_(musician)",
+      "scores": [
+        38,
+        36,
+        33,
+        33,
+        33,
+        33,
+        33,
+        32,
+        32,
+        32,
+        32,
+        32
+      ]
+    },
+    {
+      "query": "invented World Wide Web CERN",
+      "category": "Technology",
+      "success": false,
+      "found_results": [
+        "Robert_Cailliau",
+        "CERN_httpd",
+        "First_International_Conference_on_the_World-Wide_Web",
+        "The_Internet_Pilot_to_Physics",
+        "Worldbeam",
+        "Libwww",
+        "Microcosm_(CERN)",
+        "The_Web_Conference",
+        "Citizen_Cyberscience_Centre",
+        "Line_Mode_Browser",
+        "Fran\u00e7ois_Fl\u00fcckiger",
+        "WorldWideWeb"
+      ],
+      "expected_results": [
+        "Tim Berners-Lee",
+        "World Wide Web"
+      ],
+      "latency_ms": 77.68917083740234,
+      "recall": 0.0,
+      "top_result": "Robert_Cailliau",
+      "scores": [
+        23,
+        17,
+        12,
+        10,
+        8,
+        6,
+        6,
+        6,
+        6,
+        6,
+        5,
+        5
+      ]
+    },
+    {
+      "query": "open source Linux kernel operating system",
+      "category": "Technology",
+      "success": true,
+      "found_results": [
+        "Openmoko_Linux",
+        "LinuxEDU",
+        "Greg_Kroah-Hartman",
+        "Comparison_of_operating_system_kernels",
+        "Linux_kernel_mailing_list",
+        "Linux_Kernel_Developers_Summit",
+        "CloudLinux_OS",
+        "Linux",
+        "Linaro",
+        "Linux_distribution",
+        "Linux_Foundation",
+        "OpenHarmony"
+      ],
+      "expected_results": [
+        "Linux",
+        "Linus Torvalds"
+      ],
+      "latency_ms": 78.66811752319336,
+      "recall": 0.5,
+      "top_result": "Openmoko_Linux",
+      "scores": [
+        18,
+        17,
+        17,
+        16,
+        15,
+        13,
+        13,
+        13,
+        12,
+        11,
+        11,
+        10
+      ]
+    },
+    {
+      "query": "iPhone creator company Cupertino",
+      "category": "Technology",
+      "success": false,
+      "found_results": [
+        "MyDevice",
+        "Downcast_(app)",
+        "Outline_of_iOS",
+        "Vito_Technology",
+        "Cycloramic",
+        "IPhone",
+        "Oke_Okaro",
+        "Live_Photo",
+        "Icy_(application)",
+        "Flitsmeister",
+        "Mobile_Backstage",
+        "Imran_Chaudhri"
+      ],
+      "expected_results": [
+        "Apple",
+        "Steve Jobs"
+      ],
+      "latency_ms": 67.03710556030273,
+      "recall": 0.0,
+      "top_result": "MyDevice",
+      "scores": [
+        8,
+        5,
+        2,
+        2,
+        1,
+        0,
+        0,
+        -1,
+        -1,
+        -2,
+        -2,
+        -2
+      ]
+    },
+    {
+      "query": "heart medication from foxglove plant",
+      "category": "Medicine",
+      "success": false,
+      "found_results": [
+        "Medicinal_plants",
+        "Gynocardin",
+        "Forsythoside_B",
+        "Gypenoside",
+        "Snowball_seed_oil",
+        "Gelsemium_elegans",
+        "Geum_japonicum",
+        "Maritime_pine_bark_extract",
+        "Neoplasene",
+        "\u0393-Fagarine",
+        "Angelica_gigas",
+        "Nonochton"
+      ],
+      "expected_results": [
+        "Digitalis",
+        "Digoxin"
+      ],
+      "latency_ms": 71.53892517089844,
+      "recall": 0.0,
+      "top_result": "Medicinal_plants",
+      "scores": [
+        11,
+        11,
+        8,
+        8,
+        7,
+        7,
+        7,
+        6,
+        6,
+        6,
+        5,
+        5
+      ]
+    },
+    {
+      "query": "penicillin antibiotic Fleming discovery",
+      "category": "Medicine",
+      "success": true,
+      "found_results": [
+        "Penicillium_rubens",
+        "History_of_penicillin",
+        "Discovery_of_penicillin",
+        "Aminopenicillin",
+        "Alexander_Fleming",
+        "Production_of_antibiotics",
+        "Antistaphylococcal_penicillins",
+        "Carboxypenicillin",
+        "Ureidopenicillin",
+        "Aspoxicillin",
+        "Pen-Strep",
+        "Viridicatumtoxin_B"
+      ],
+      "expected_results": [
+        "Penicillin",
+        "Alexander Fleming"
+      ],
+      "latency_ms": 66.6508674621582,
+      "recall": 0.5,
+      "top_result": "Penicillium_rubens",
+      "scores": [
+        22,
+        21,
+        20,
+        17,
+        16,
+        16,
+        15,
+        12,
+        10,
+        9,
+        8,
+        7
+      ]
+    },
+    {
+      "query": "xkcd web comic",
+      "category": "Edge Cases",
+      "success": true,
+      "found_results": [
+        "2005_in_webcomics",
+        "Xkcd",
+        "Randall_Munroe",
+        "2000_in_webcomics",
+        "2011_in_webcomics",
+        "2013_in_webcomics",
+        "Time_(xkcd)",
+        "Ryan_North",
+        "2009_in_webcomics",
+        "Infinite_canvas",
+        "Penny_Arcade",
+        "Art_Comics_Daily"
+      ],
+      "expected_results": [
+        "xkcd",
+        "Randall Munroe"
+      ],
+      "latency_ms": 75.78396797180176,
+      "recall": 0.5,
+      "top_result": "2005_in_webcomics",
+      "scores": [
+        21,
+        20,
+        19,
+        14,
+        11,
+        11,
+        11,
+        10,
+        10,
+        9,
+        9,
+        8
+      ]
+    },
+    {
+      "query": "C++ programming language",
+      "category": "Edge Cases",
+      "success": true,
+      "found_results": [
+        "Outline_of_the_C++_programming_language",
+        "CRTP",
+        "C++",
+        "Carbon_(programming_language)",
+        "C_syntax",
+        "FortranM",
+        "C,_The_Complete_Reference",
+        "Types_and_Programming_Languages",
+        "Pict_(programming_language)",
+        "CiMPLE",
+        "Polymorphic_Programming_Language",
+        "The_C++_Programming_Language"
+      ],
+      "expected_results": [
+        "C++",
+        "Bjarne Stroustrup"
+      ],
+      "latency_ms": 64.18371200561523,
+      "recall": 0.5,
+      "top_result": "Outline_of_the_C++_programming_language",
+      "scores": [
+        29,
+        26,
+        26,
+        22,
+        21,
+        21,
+        20,
+        20,
+        20,
+        20,
+        20,
+        19
+      ]
+    },
+    {
+      "query": "e=mc^2 mass energy equivalence",
+      "category": "Edge Cases",
+      "success": true,
+      "found_results": [
+        "Mass\u2013energy_equivalence",
+        "Why_Does_E=mc\u00b2?",
+        "MC2",
+        "Energy\u2013momentum_relation",
+        "Mass_in_special_relativity",
+        "Specific_potential_energy",
+        "Einstein_field_equations",
+        "Conservation_of_mass",
+        "Einstein_relation",
+        "Electromagnetic_mass",
+        "Specific_kinetic_energy",
+        "EMCC"
+      ],
+      "expected_results": [
+        "Mass-energy",
+        "Einstein"
+      ],
+      "latency_ms": 81.17818832397461,
+      "recall": 0.5,
+      "top_result": "Mass\u2013energy_equivalence",
+      "scores": [
+        21,
+        17,
+        7,
+        4,
+        2,
+        2,
+        0,
+        -5,
+        -5,
+        -5,
+        -6,
+        -6
+      ]
+    },
+    {
+      "query": "author of 1984 and Animal Farm",
+      "category": "Multi-hop",
+      "success": false,
+      "found_results": [
+        "Do_Animals_Have_Rights?",
+        "Old_MacDonald_Had_a_Farm_(short_story)",
+        "Farm_Forward",
+        "Harold_D._Guither",
+        "Old_Major",
+        "Animal_Farm",
+        "An_American_Trilogy_(book)",
+        "The_End_of_Animal_Farming",
+        "Friend_Sykes",
+        "Huysman's_Pets",
+        "Animal_Machines",
+        "Farmageddon_(book)"
+      ],
+      "expected_results": [
+        "George Orwell",
+        "1984",
+        "Animal Farm"
+      ],
+      "latency_ms": 85.57891845703125,
+      "recall": 0.0,
+      "top_result": "Do_Animals_Have_Rights?",
+      "scores": [
+        26,
+        25,
+        22,
+        19,
+        19,
+        19,
+        18,
+        17,
+        17,
+        16,
+        16,
+        14
+      ]
+    },
+    {
+      "query": "company founded by Bill Gates and Paul Allen",
+      "category": "Multi-hop",
+      "success": false,
+      "found_results": [
+        "Martin_Allen_(entrepreneur)",
+        "Allen_&_Company",
+        "Computer_Center_Corporation",
+        "Booz_Allen_Hamilton",
+        "Adam_Dell",
+        "Allen_Michels",
+        "Bill_Gates",
+        "Allen_Howard",
+        "Jason_Johnson_(entrepreneur)",
+        "Catalyst_Technologies",
+        "Robert_Cohn",
+        "P-Cube"
+      ],
+      "expected_results": [
+        "Microsoft",
+        "Bill Gates"
+      ],
+      "latency_ms": 79.25915718078613,
+      "recall": 0.0,
+      "top_result": "Martin_Allen_(entrepreneur)",
+      "scores": [
+        21,
+        19,
+        19,
+        14,
+        14,
+        13,
+        12,
+        12,
+        11,
+        11,
+        11,
+        10
+      ]
+    },
+    {
+      "query": "Mercury",
+      "category": "Ambiguous",
+      "success": false,
+      "found_results": [],
+      "expected_results": [
+        "Mercury",
+        "Planet",
+        "Element"
+      ],
+      "latency_ms": 3.9920806884765625,
+      "recall": 0.0,
+      "top_result": "",
+      "scores": []
+    },
+    {
+      "query": "Jordan",
+      "category": "Ambiguous",
+      "success": false,
+      "found_results": [],
+      "expected_results": [
+        "Jordan",
+        "Michael Jordan",
+        "Country"
+      ],
+      "latency_ms": 4.4460296630859375,
+      "recall": 0.0,
+      "top_result": "",
+      "scores": []
+    }
+  ]
+}

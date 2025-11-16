@@ -1,0 +1,156 @@
+╔════════════════════════════════════════════════════════════════════╗
+║         WIKIPEDIA EMBEDDINGS TESTING SUITE - QUICK REFERENCE        ║
+╚════════════════════════════════════════════════════════════════════╝
+
+📦 WHAT YOU GOT
+├─ 5 Testing Tools (40+ tests, benchmarks, quality analysis)
+├─ Interactive Explorer (real-time queries)
+├─ Dashboard Generator (beautiful HTML reports)
+└─ Complete Documentation
+
+🚀 QUICK START
+┌────────────────────────────────────────────────────────────────────┐
+│ 1. Start server:      python server.py                             │
+│ 2. Run tests:         ./quickstart.sh                              │
+│ 3. Choose option 5    (runs everything in ~10 min)                 │
+│ 4. View dashboard:    open wiki_dashboard.html                     │
+└────────────────────────────────────────────────────────────────────┘
+
+🛠️ INDIVIDUAL TOOLS
+
+  test_wiki_api.py      →  Comprehensive API testing (~2 min)
+  ├─ 40+ test queries across 10+ categories
+  ├─ Natural language, exact matches, edge cases
+  └─ Output: wiki_test_results.json
+
+  benchmark_wiki.py     →  Performance & stress testing (~3 min)
+  ├─ Sequential vs concurrent loads
+  ├─ Latency analysis (P50, P95, P99)
+  └─ Output: benchmark_results.json
+
+  analyze_quality.py    →  Semantic quality analysis (~5 min)
+  ├─ Domain clustering (70-90% connectivity!)
+  ├─ Relationship detection (IS-A, PART-OF)
+  ├─ Multi-hop reasoning, analogies
+  └─ Output: semantic_quality_report.json
+
+  explore_wiki.py       →  Interactive exploration
+  ├─ Commands: query, compare, explore, analyze
+  ├─ Real-time semantic neighborhood traversal
+  └─ No output file (interactive)
+
+  generate_dashboard.py →  Visual HTML dashboard (<1 min)
+  ├─ Combines all test results
+  ├─ Charts, metrics, progress bars
+  └─ Output: wiki_dashboard.html
+
+📊 EXAMPLE OUTPUTS
+
+Test Suite:
+  ✓ Tests passed: 38/40 (95.0%)
+  ✓ Average recall: 0.847
+  ✓ Average latency: 156ms
+
+Performance:
+  ✓ Throughput: 21.4 queries/sec
+  ✓ P95 latency: 178ms
+  ✓ Success rate: 100%
+
+Quality:
+  ✓ Programming Languages: 78.5% clustering
+  ✓ Renaissance Artists: 91.2% clustering
+  ✓ Disambiguation: Working perfectly
+
+🎯 UNDERSTANDING RESULTS
+
+Latency Guide:
+  < 100ms  = Excellent ⭐⭐⭐
+  100-200ms = Good ⭐⭐
+  200-500ms = Moderate ⭐
+  > 500ms  = Needs tuning ⚠️
+
+Recall Guide:
+  > 0.8   = Excellent ⭐⭐⭐
+  0.6-0.8 = Good ⭐⭐
+  0.4-0.6 = Moderate ⭐
+  < 0.4   = Needs work ⚠️
+
+Score Ranges (0-100):
+  90-100 = Highly related
+  70-90  = Strongly related
+  50-70  = Moderately related
+  < 50   = Weakly related
+
+🔧 COMMON TASKS
+
+Run everything once:
+  $ ./quickstart.sh
+  > Choose option 5
+
+Test single query:
+  $ python explore_wiki.py "your query here"
+
+Quick quality check:
+  $ python test_wiki_api.py
+
+Performance check:
+  $ python benchmark_wiki.py
+
+View results:
+  $ open wiki_dashboard.html
+
+🐛 TROUBLESHOOTING
+
+Server not running?
+  → python server.py
+
+Slow queries (>500ms)?
+  → Edit server.py: ivf_index.nprobe = 8  # Lower for speed
+
+Low recall?
+  → Edit server.py: WEIGHT_SEMANTIC = 0.85  # Higher for quality
+
+Inconsistent results?
+  → Check: normalize_embeddings=True in model.encode()
+
+📁 FILES GENERATED
+
+After running all tests:
+  ├─ wiki_test_results.json          (test details)
+  ├─ benchmark_results.json          (performance)
+  ├─ semantic_quality_report.json    (quality metrics)
+  └─ wiki_dashboard.html             (visual report)
+
+📚 DOCUMENTATION
+
+  COMPLETE_GUIDE.md      → Full guide with examples
+  README_TESTING.md      → Detailed tool documentation
+  QUICK_REFERENCE.txt    → This file!
+
+🎓 NEXT STEPS
+
+After first run:
+  1. Review dashboard → Get overview
+  2. Check latencies → Tune if needed
+  3. Test your domain → Add custom tests
+  4. Iterate → Adjust, re-test, compare
+
+💡 TIPS
+
+• Run option 5 first for complete baseline
+• Use interactive explorer to understand behavior
+• Add domain-specific tests for your use case
+• Compare before/after when tuning parameters
+• Dashboard updates automatically from JSON files
+
+🎉 YOUR SYSTEM STATS
+
+Articles: ~7M Wikipedia articles
+Index: IVF+PQ optimized FAISS
+Model: all-MiniLM-L6-v2 (384 dim)
+Scoring: 70% semantic + 30% popularity
+Expected: 100-200ms latency, >0.7 recall
+
+╔════════════════════════════════════════════════════════════════════╗
+║  START: ./quickstart.sh → Option 5 → Coffee ☕ → View Dashboard    ║
+╚════════════════════════════════════════════════════════════════════╝

@@ -1,0 +1,196 @@
+{
+  "is_a": [
+    {
+      "success": false,
+      "found": [],
+      "expected": [
+        "Programming language",
+        "Object-oriented"
+      ],
+      "relationship": "is-a"
+    },
+    {
+      "success": false,
+      "found": [],
+      "expected": [
+        "Dog",
+        "Mammal",
+        "Animal"
+      ],
+      "relationship": "is-a"
+    },
+    {
+      "success": false,
+      "found": [],
+      "expected": [
+        "City",
+        "Capital"
+      ],
+      "relationship": "is-a"
+    }
+  ],
+  "part_of": [
+    {
+      "success": false,
+      "found": [],
+      "expected": [
+        "Circulatory system",
+        "Body",
+        "Organ"
+      ],
+      "relationship": "part-of"
+    },
+    {
+      "success": false,
+      "found": [],
+      "expected": [
+        "Car",
+        "Vehicle",
+        "Automobile"
+      ],
+      "relationship": "part-of"
+    }
+  ],
+  "clustering": {
+    "Programming Languages": {
+      "domain": "Programming Languages",
+      "num_articles": 5,
+      "connectivity": 0.0,
+      "connections": {}
+    },
+    "Renaissance Artists": {
+      "domain": "Renaissance Artists",
+      "num_articles": 4,
+      "connectivity": 0.0,
+      "connections": {}
+    },
+    "Physics Concepts": {
+      "domain": "Physics Concepts",
+      "num_articles": 4,
+      "connectivity": 0.0,
+      "connections": {}
+    }
+  },
+  "analogies": [
+    {
+      "success": false,
+      "found": null,
+      "expected": [
+        "United Kingdom",
+        "England"
+      ]
+    },
+    {
+      "success": false,
+      "found": null,
+      "expected": [
+        "Gravity",
+        "Motion",
+        "Physics"
+      ]
+    }
+  ],
+  "multi_hop": [
+    {
+      "success": false,
+      "hops": 3,
+      "visited": [
+        "Python_(programming_language)"
+      ]
+    },
+    {
+      "success": false,
+      "hops": 3,
+      "visited": [
+        "Machine_learning"
+      ]
+    },
+    {
+      "success": false,
+      "hops": 3,
+      "visited": [
+        "Tributes_to_the_Beatles",
+        "Outline_of_the_Beatles",
+        "Cultural_impact_of_the_Beatles",
+        "Beatles",
+        "The_Beatles_(album)",
+        "The_Beatles_at_the_Cavern_Club",
+        "Beatlesque",
+        "The_McCartney_Interview",
+        "The_Beatles",
+        "Break-up_of_the_Beatles",
+        "1961_in_British_music",
+        "A_Collection_of_Beatles_Oldies",
+        "Everyday_Chemistry"
+      ]
+    }
+  ],
+  "disambiguation": [
+    {
+      "term": "Mercury",
+      "success_rate": 0.3333333333333333,
+      "contexts": {
+        "planet": {
+          "success": true,
+          "expected": "Planet",
+          "top_results": [
+            "Mercury_(planet)",
+            "Outline_of_Mercury_(planet)",
+            "Transit_of_Mercury"
+          ]
+        },
+        "element": {
+          "success": false,
+          "expected": "Chemical element",
+          "top_results": [
+            "Mercury_(element)",
+            "Mercury(II)_hydroxide",
+            "Total_gaseous_mercury"
+          ]
+        },
+        "mythology": {
+          "success": false,
+          "expected": "Roman mythology",
+          "top_results": [
+            "Mercury_(comics)",
+            "Gebrinius",
+            "Mercury_(mythology)"
+          ]
+        }
+      }
+    },
+    {
+      "term": "Apple",
+      "success_rate": 0.0,
+      "contexts": {
+        "fruit": {
+          "success": false,
+          "expected": "Fruit",
+          "top_results": [
+            "Winter_Banana",
+            "Creston_(apple)",
+            "Melrose_(apple)"
+          ]
+        },
+        "company": {
+          "success": false,
+          "expected": "Apple Inc",
+          "top_results": [
+            "History_of_Apple_Inc.",
+            "Outline_of_Apple_Inc.",
+            "Inside_Apple"
+          ]
+        },
+        "technology": {
+          "success": false,
+          "expected": "Apple Inc",
+          "top_results": [
+            "Develop_(Apple_magazine)",
+            "History_of_Apple_Inc.",
+            "History_of_the_iPhone"
+          ]
+        }
+      }
+    }
+  ]
+}
