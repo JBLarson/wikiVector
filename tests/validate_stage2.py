@@ -4,8 +4,8 @@ import sys
 from datetime import datetime
 
 # --- CONFIG ---
-DB_PATH = "data/metadata.db"
-TEMP_DB_PATH = "data/temp_wiki.db"
+DB_PATH = "../data/metadata.db"
+TEMP_DB_PATH = "../data/temp_wiki.db"
 # ----------------
 
 class Colors:

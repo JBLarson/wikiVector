@@ -1,5 +1,5 @@
+#!/usr/bin/env python3
 import sqlite3
-import re
 import time
 import sys
 import os
@@ -7,141 +7,16 @@ import os
 # --- CONFIG ---
 PAGELINKS_SQL_PATH = "data/enwiki-latest-pagelinks.sql"
 TEMP_DB_PATH = "data/temp_wiki.db"
+BATCH_SIZE = 100000
 # ----------------
 
-def parse_sql_inserts(file_path, value_processor, batch_size=10000):
-    """Parse SQL INSERT statements and yield batches of values"""
-    insert_pattern = re.compile(r'INSERT INTO `\w+` VALUES (.+);', re.DOTALL)
-    
-    batch = []
-    lines_processed = 0
-    last_update = time.time()
-    
-    file_size = os.path.getsize(file_path)
-    
-    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-        buffer = ''
-        bytes_read = 0
-        
-        for line in f:
-            bytes_read += len(line.encode('utf-8'))
-            lines_processed += 1
-            
-            current_time = time.time()
-            if current_time - last_update >= 1.0:
-                percent = (bytes_read / file_size) * 100
-                print(f"  Parsing: {percent:.1f}% ({lines_processed:,} lines)", end='\r')
-                last_update = current_time
-            
-            if line.startswith('INSERT INTO'):
-                buffer = line
-            elif buffer:
-                buffer += line
-                
-            if buffer and buffer.rstrip().endswith(';'):
-                match = insert_pattern.search(buffer)
-                if match:
-                    values_str = match.group(1)
-                    rows = parse_value_tuples(values_str)
-                    
-                    for row in rows:
-                        processed = value_processor(row)
-                        if processed:
-                            batch.append(processed)
-                            
-                            if len(batch) >= batch_size:
-                                yield batch
-                                batch = []
-                
-                buffer = ''
-        
-        if batch:
-            yield batch
-
-def parse_value_tuples(values_str):
-    """Parse comma-separated tuples from SQL VALUES clause"""
-    rows = []
-    current_row = []
-    current_value = ''
-    in_quotes = False
-    escape_next = False
-    paren_depth = 0
-    
-    for char in values_str:
-        if escape_next:
-            current_value += char
-            escape_next = False
-            continue
-            
-        if char == '\\':
-            escape_next = True
-            current_value += char
-            continue
-            
-        if char == "'" and not escape_next:
-            in_quotes = not in_quotes
-            current_value += char
-            continue
-            
-        if not in_quotes:
-            if char == '(':
-                if paren_depth > 0:
-                    current_value += char
-                paren_depth += 1
-            elif char == ')':
-                paren_depth -= 1
-                if paren_depth == 0:
-                    if current_value:
-                        current_row.append(current_value.strip())
-                    if current_row:
-                        rows.append(current_row)
-                    current_row = []
-                    current_value = ''
-                else:
-                    current_value += char
-            elif char == ',' and paren_depth == 1:
-                current_row.append(current_value.strip())
-                current_value = ''
-            else:
-                current_value += char
-        else:
-            current_value += char
-    
-    return rows
-
-def process_pagelinks_row(row):
-    """Extract (pl_from, pl_from_namespace, pl_target_id) from row"""
-    if len(row) < 3:
-        return None
-    
-    try:
-        pl_from = int(row[0])
-        pl_from_namespace = int(row[1])
-        pl_target_id = int(row[2])
-        
-        # Import all links - we'll filter during JOIN
-        return (pl_from, pl_from_namespace, pl_target_id)
-    except (ValueError, IndexError):
-        pass
-    
-    return None
-
-def add_pagelinks_table():
-    """Add pagelinks table to existing database"""
-    if not os.path.exists(TEMP_DB_PATH):
-        print(f"Error: {TEMP_DB_PATH} does not exist!")
-        print("Please run processPage.py first.")
-        sys.exit(1)
-    
+def reset_pagelinks_table():
     conn = sqlite3.connect(TEMP_DB_PATH)
     cursor = conn.cursor()
     
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pagelinks'")
-    if cursor.fetchone():
-        print("Warning: pagelinks table already exists. Dropping and recreating...")
-        cursor.execute("DROP TABLE pagelinks")
+    print("Dropping existing pagelinks table...")
+    cursor.execute("DROP TABLE IF EXISTS pagelinks")
     
-    # Match the actual Wikipedia schema
     cursor.execute("""
         CREATE TABLE pagelinks (
             pl_from INTEGER,
@@ -152,82 +27,154 @@ def add_pagelinks_table():
     
     conn.commit()
     conn.close()
-    print(f"Created pagelinks table in {TEMP_DB_PATH}")
+    print("Created fresh pagelinks table")
 
 def process_pagelinks():
-    print("Starting pagelinks processor...")
-    print(f"File: {PAGELINKS_SQL_PATH}")
+    print("=" * 80)
+    print("PAGELINKS PROCESSOR (FIXED)")
+    print("=" * 80)
+    print()
+    
+    if not os.path.exists(PAGELINKS_SQL_PATH):
+        print(f"ERROR: {PAGELINKS_SQL_PATH} not found")
+        sys.exit(1)
     
     file_size = os.path.getsize(PAGELINKS_SQL_PATH)
-    file_size_gb = file_size / (1024**3)
-    print(f"File size: {file_size_gb:.2f} GB")
+    print(f"File: {PAGELINKS_SQL_PATH} ({file_size / (1024**3):.2f} GB)")
+    print(f"Expected: ~2 billion records")
+    print()
     
-    total_start_time = time.time()
+    reset_pagelinks_table()
     
-    conn = None
+    conn = sqlite3.connect(TEMP_DB_PATH)
+    cursor = conn.cursor()
+    
+    total_start = time.time()
+    batch = []
+    total_imported = 0
+    insert_statements = 0
+    errors = 0
+    
+    print("Phase 1: Importing pagelinks...")
+    print("This will take 2-4 hours - DO NOT INTERRUPT")
+    print()
     
     try:
-        add_pagelinks_table()
+        with open(PAGELINKS_SQL_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+            for line_num, line in enumerate(f, 1):
+                if not line.startswith('INSERT INTO'):
+                    continue
+                
+                insert_statements += 1
+                
+                if 'VALUES ' not in line:
+                    continue
+                
+                try:
+                    values_portion = line.split('VALUES ', 1)[1].rstrip().rstrip(';')
+                    
+                    # Remove outer parens
+                    values_portion = values_portion.strip()
+                    if values_portion.startswith('('):
+                        values_portion = values_portion[1:]
+                    if values_portion.endswith(')'):
+                        values_portion = values_portion[:-1]
+                    
+                    # Split by ),(
+                    tuples = values_portion.split('),(')
+                    
+                    for tuple_str in tuples:
+                        fields = tuple_str.split(',')
+                        
+                        if len(fields) >= 3:
+                            try:
+                                pl_from = int(fields[0].strip())
+                                pl_from_namespace = int(fields[1].strip())
+                                pl_target_id = int(fields[2].strip())
+                                
+                                batch.append((pl_from, pl_from_namespace, pl_target_id))
+                                
+                                if len(batch) >= BATCH_SIZE:
+                                    cursor.executemany("INSERT INTO pagelinks VALUES (?, ?, ?)", batch)
+                                    total_imported += len(batch)
+                                    batch = []
+                                    
+                                    if total_imported % 50000000 == 0:
+                                        conn.commit()
+                                        elapsed = time.time() - total_start
+                                        rate = total_imported / elapsed
+                                        eta_seconds = (2068000000 - total_imported) / rate if rate > 0 else 0
+                                        eta_hours = eta_seconds / 3600
+                                        pct = 100 * total_imported / 2068000000
+                                        
+                                        print(f"  Progress: {pct:5.1f}% | {total_imported:,} records | {rate:,.0f}/sec | ETA: {eta_hours:.1f}h")
+                            except (ValueError, IndexError) as e:
+                                errors += 1
+                                if errors < 10:
+                                    print(f"  Parse error in tuple: {e}")
+                
+                except Exception as e:
+                    errors += 1
+                    if errors < 10:
+                        print(f"  Error processing INSERT {insert_statements}: {e}")
+                    if errors > 1000:
+                        print(f"  Too many errors ({errors}), stopping")
+                        raise
         
-        conn = sqlite3.connect(TEMP_DB_PATH)
-        cursor = conn.cursor()
-        
-        print(f"\nPhase 1: Parsing and importing pagelinks...")
-        print("This will take 2-4 hours...")
-        start_time = time.time()
-        total_links = 0
-        batch_count = 0
-        
-        for batch in parse_sql_inserts(PAGELINKS_SQL_PATH, process_pagelinks_row):
+        # Insert remaining
+        if batch:
             cursor.executemany("INSERT INTO pagelinks VALUES (?, ?, ?)", batch)
-            total_links += len(batch)
-            batch_count += 1
-            
-            if batch_count % 100 == 0:
-                conn.commit()
-            
-            current_time = time.time()
-            elapsed = current_time - start_time
-            rate = total_links / elapsed if elapsed > 0 else 0
-            
-            if total_links > 100000:
-                estimated_total = 550_000_000
-                eta_seconds = (estimated_total - total_links) / rate if rate > 0 else 0
-                eta_hours = eta_seconds / 3600
-                print(f"  Imported {total_links:,} links @ {rate:,.0f}/sec (ETA: {eta_hours:.1f}h)    ", end='\r')
-            else:
-                print(f"  Imported {total_links:,} links @ {rate:,.0f}/sec    ", end='\r')
+            total_imported += len(batch)
+            conn.commit()
         
-        conn.commit()
-        elapsed = time.time() - start_time
-        print(f"\n\nPhase 1 complete: Imported {total_links:,} links in {elapsed/60:.1f} minutes")
+        elapsed = time.time() - total_start
+        print(f"\n\nPhase 1 complete:")
+        print(f"  INSERT statements: {insert_statements:,}")
+        print(f"  Records imported: {total_imported:,}")
+        print(f"  Errors: {errors:,}")
+        print(f"  Time: {elapsed/60:.1f} minutes")
         
-        print("\nPhase 2: Creating index...")
-        print("This will take 10-20 minutes...")
-        start_time = time.time()
-        # Index on target_id since we'll be joining on page_id
+        expected = 2068000000
+        pct = 100 * total_imported / expected
+        
+        if pct < 95:
+            print(f"\n  ⚠ WARNING: Only {pct:.1f}% of expected records imported!")
+        else:
+            print(f"\n  ✓ Import appears complete ({pct:.1f}%)")
+        
+        print()
+        
+        # Create index
+        print("Phase 2: Creating index (10-20 minutes)...")
+        start = time.time()
         cursor.execute("CREATE INDEX idx_pagelinks_target ON pagelinks(pl_target_id)")
         conn.commit()
-        elapsed = time.time() - start_time
-        print(f"Index created in {elapsed/60:.1f} minutes")
+        print(f"Index created in {(time.time() - start)/60:.1f} minutes")
+        print()
         
+        # Stats
         cursor.execute("SELECT COUNT(*) FROM pagelinks")
-        total_count = cursor.fetchone()[0]
-        print(f"\nTotal pagelinks imported: {total_count:,}")
+        final_count = cursor.fetchone()[0]
         
-        total_elapsed = time.time() - total_start_time
-        print(f"Total processing time: {total_elapsed/3600:.2f} hours")
-        print(f"Output: {TEMP_DB_PATH}")
-
+        print("=" * 80)
+        print("COMPLETE")
+        print("=" * 80)
+        print(f"Total pagelinks: {final_count:,}")
+        print(f"Total time: {(time.time() - total_start)/3600:.2f} hours")
+        
+    except KeyboardInterrupt:
+        print("\n\n!!! INTERRUPTED BY USER !!!")
+        print(f"Imported {total_imported:,} records before interruption")
+        conn.rollback()
+        sys.exit(1)
     except Exception as e:
-        print(f"\n[ERROR] {e}", file=sys.stderr)
+        print(f"\n\nERROR: {e}")
         import traceback
         traceback.print_exc()
-        if conn:
-            conn.rollback()
+        conn.rollback()
+        sys.exit(1)
     finally:
-        if conn:
-            conn.close()
+        conn.close()
 
 if __name__ == "__main__":
     process_pagelinks()
