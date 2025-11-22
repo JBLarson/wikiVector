@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
 """
-WIKIPEDIA PAGERANK CALCULATOR
+WIKIPEDIA PAGERANK CALCULATOR (Corrected for macOS/actual schema)
 
 Calculates PageRank scores using the link graph extracted by extract_link_graph.py.
-
-PageRank is the gold standard for measuring article importance because it:
-1. Counts how many articles link to you (like backlinks)
-2. Weights those links by the importance of the source (recursive)
-3. Converges to a stable importance score
-
-This is literally how Google ranks web pages.
+Works with the 'pagelinks' table schema.
 
 Expected runtime: ~30-60 minutes for 6.7M articles
 """
@@ -25,9 +19,9 @@ import time
 # ============================================================================
 
 METADATA_DB = "../../../data/metadata.db"
-DAMPING_FACTOR = 0.85  # Standard PageRank damping (probability of following a link)
-ITERATIONS = 50        # Number of power iterations (convergence usually by 20-30)
-CONVERGENCE_THRESHOLD = 1e-6  # Stop early if change is tiny
+DAMPING_FACTOR = 0.85  # Standard PageRank damping
+ITERATIONS = 50        # Number of power iterations
+CONVERGENCE_THRESHOLD = 1e-6  # Early stopping threshold
 
 # ============================================================================
 # BUILD LINK MATRIX
@@ -87,6 +81,8 @@ def build_link_matrix():
     matrix = lil_matrix((n, n), dtype=np.float32)
     
     links_processed = 0
+    links_skipped = 0
+    
     for source_id, target_id in tqdm(cursor.fetchall(), desc="Building matrix"):
         if source_id in id_to_idx and target_id in id_to_idx:
             source_idx = id_to_idx[source_id]
@@ -97,8 +93,12 @@ def build_link_matrix():
             matrix[target_idx, source_idx] = weight
             
             links_processed += 1
+        else:
+            links_skipped += 1
     
     print(f"Links processed: {links_processed:,}")
+    if links_skipped > 0:
+        print(f"Links skipped (IDs not in articles table): {links_skipped:,}")
     
     # Convert to CSR for efficient matrix-vector multiplication
     print("\nConverting to CSR format (optimized for computation)...")
@@ -146,7 +146,7 @@ def calculate_pagerank(matrix, damping=DAMPING_FACTOR, max_iterations=ITERATIONS
     # Initialize with uniform distribution
     rank = np.ones(n, dtype=np.float32) / n
     
-    # Teleportation vector (for dangling nodes)
+    # Teleportation vector (for dangling nodes and random jumps)
     teleport = (1 - damping) / n
     
     print("Running power iteration...")
@@ -256,32 +256,37 @@ def show_results():
     print("-"*80)
     
     for i, (title, pr, bl, cc) in enumerate(cursor.fetchall(), 1):
-        print(f"{i:<5} {pr:>8.2f}   {bl:>10,}   {cc:>8,}   {title}")
+        bl_str = f"{bl:,}" if bl else "N/A"
+        cc_str = f"{cc:,}" if cc else "N/A"
+        print(f"{i:<5} {pr:>8.2f}   {bl_str:>10}   {cc_str:>8}   {title}")
     
-    # Compare with backlinks
-    print("\n" + "="*80)
-    print("CORRELATION: PageRank vs Backlinks")
-    print("="*80)
-    
-    cursor.execute("""
-        SELECT pagerank, backlinks 
-        FROM articles 
-        WHERE backlinks > 0 AND pagerank > 0
-    """)
-    
-    data = cursor.fetchall()
-    pr_scores = np.array([row[0] for row in data])
-    bl_counts = np.array([row[1] for row in data])
-    
-    correlation = np.corrcoef(pr_scores, bl_counts)[0, 1]
-    print(f"\nPearson correlation: {correlation:.4f}")
-    
-    if correlation > 0.8:
-        print("✓ Strong correlation - PageRank captures similar signal as backlinks")
-    elif correlation > 0.6:
-        print("~ Moderate correlation - PageRank adds new information")
-    else:
-        print("⚠ Weak correlation - PageRank captures very different importance")
+    # Compare with backlinks (if available)
+    cursor.execute("SELECT COUNT(*) FROM articles WHERE backlinks > 0")
+    if cursor.fetchone()[0] > 0:
+        print("\n" + "="*80)
+        print("CORRELATION: PageRank vs Backlinks")
+        print("="*80)
+        
+        cursor.execute("""
+            SELECT pagerank, backlinks 
+            FROM articles 
+            WHERE backlinks > 0 AND pagerank > 0
+        """)
+        
+        data = cursor.fetchall()
+        if len(data) > 100:  # Need enough data points
+            pr_scores = np.array([row[0] for row in data])
+            bl_counts = np.array([row[1] for row in data])
+            
+            correlation = np.corrcoef(pr_scores, bl_counts)[0, 1]
+            print(f"\nPearson correlation: {correlation:.4f}")
+            
+            if correlation > 0.8:
+                print("✓ Strong correlation - PageRank captures similar signal as backlinks")
+            elif correlation > 0.6:
+                print("~ Moderate correlation - PageRank adds new information")
+            else:
+                print("⚠ Weak correlation - PageRank captures very different importance")
     
     conn.close()
 
