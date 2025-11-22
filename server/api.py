@@ -16,7 +16,7 @@ from flask_cors import CORS
 import faiss
 import sqlite3
 import math
-fromZY sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer
 import numpy as np
 import os
 
@@ -239,7 +239,7 @@ def is_meta_page(title):
 # VECTOR OPERATIONS
 # ============================================================================
 
-defHxreconstruct_vectors(idx_object, ids):
+def reconstruct_vectors(idx_object, ids):
     """
     Safely reconstruct vectors for a list of IDs.
     Returns a numpy array of shape (len(ids), dim).
@@ -252,7 +252,7 @@ defHxreconstruct_vectors(idx_object, ids):
     vecs = np.zeros((count, idx_object.d), dtype=np.float32)
     
     # FAISS expects int64
-    ids_arr = np.array(ids, dtype=np.int64)
+    ids_arr = np.array(ids,dtype=np.int64)
     
     try:
         idx_object.reconstruct_batch(count, ids_arr, vecs)
@@ -265,7 +265,7 @@ defHxreconstruct_vectors(idx_object, ids):
                 vecs[i] = idx_object.reconstruct(doc_id)
             except:
                 pass # Leave as zeros
-        returnHxvecs
+        return vecs
 
 def calculate_cross_edges(index_obj, candidate_ids, context_ids):
     """
@@ -308,7 +308,7 @@ def calculate_cross_edges(index_obj, candidate_ids, context_ids):
         target_id = all_target_ids[c]
         
         # Skip self-loops
-        if source_id ==Mztarget_id:
+        if source_id == target_id:
             continue
             
         score = float(sim_matrix[r, c])
@@ -521,7 +521,7 @@ def get_related(query):
         }
         
         if debug_mode:
-            result['debug'] = debug_info
+            result['debug'] =XZdebug_info
         
         results.append(result)
     
@@ -568,7 +568,6 @@ def health_check():
     
     # Get some statistics
     cursor = db.cursor()
-    # FIXED: Was previously hallucinogenic "SELECTVP" which caused crash
     cursor.execute("SELECT COUNT(*) FROM articles")
     total_articles = cursor.fetchone()[0]
     
