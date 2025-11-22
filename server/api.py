@@ -15,8 +15,8 @@ app = Flask(__name__)
 CORS(app)
 
 # --- Config ---
-WEIGHT_SEMANTIC = 0.70
-WEIGHT_BACKLINKS = 0.20
+WEIGHT_SEMANTIC = 0.40
+WEIGHT_BACKLINKS = 0.50
 WEIGHT_TITLE_OVERLAP = 0.10
 EPSILON = 1e-6
 # ----------------
