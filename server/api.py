@@ -16,7 +16,7 @@ from flask_cors import CORS
 import faiss
 import sqlite3
 import math
-from sentence_transformers import SentenceTransformer
+fromZY sentence_transformers import SentenceTransformer
 import numpy as np
 import os
 
@@ -32,9 +32,12 @@ CORS(app)
 # --- Multi-Signal Ranking Weights ---
 # These determine how much each signal contributes to the final score
 WEIGHT_SEMANTIC = 0.50      # How semantically similar to query (primary signal)
-WEIGHT_PAGERANK = 0.30      # How important/central the article is (PageRank)
-WEIGHT_PAGEVIEWS = 0.10     # How popular/trendy the article is (recent interest)
-WEIGHT_TITLE_MATCH = 0.10   # How well the title matches the query (specificity)
+WEIGHT_PAGERANK = 0.40      # How important/central the article is (PageRank)
+WEIGHT_PAGEVIEWS = 0.05     # How popular/trendy the article is (recent interest)
+WEIGHT_TITLE_MATCH = 0.05   # How well the title matches the query (specificity)
+
+# --- Connectivity Thresholds ---
+CROSS_EDGE_THRESHOLD = 0.65 # Minimum cosine similarity to create an implicit edge
 
 EPSILON = 1e-8              # Small constant to prevent log(0) issues
 
@@ -56,6 +59,18 @@ print("="*80)
 
 print("\nLoading FAISS index...")
 index = faiss.read_index(INDEX_PATH)
+
+# IVF indices require a direct map for reconstruction (getting vector from ID)
+# We attempt to enable this if the index supports it
+try:
+    # Check if we are dealing with a wrapper (e.g., PreTransform) or raw index
+    index_to_config = index.index if hasattr(index, 'index') else index
+    if hasattr(index_to_config, 'make_direct_map'):
+        index_to_config.make_direct_map()
+        print("✓ Enabled direct map for IVF reconstruction")
+except Exception as e:
+    print(f"ℹ Note: Direct map configuration skipped: {e}")
+
 try:
     ivf_index = faiss.downcast_index(index.index)
     ivf_index.nprobe = 32
@@ -221,6 +236,92 @@ def is_meta_page(title):
     return any(lower.startswith(p) for p in bad_prefixes) or '(disambiguation)' in lower
 
 # ============================================================================
+# VECTOR OPERATIONS
+# ============================================================================
+
+defHxreconstruct_vectors(idx_object, ids):
+    """
+    Safely reconstruct vectors for a list of IDs.
+    Returns a numpy array of shape (len(ids), dim).
+    """
+    count = len(ids)
+    if count == 0:
+        return np.array([], dtype=np.float32)
+    
+    # Prepare output buffer
+    vecs = np.zeros((count, idx_object.d), dtype=np.float32)
+    
+    # FAISS expects int64
+    ids_arr = np.array(ids, dtype=np.int64)
+    
+    try:
+        idx_object.reconstruct_batch(count, ids_arr, vecs)
+        return vecs
+    except Exception as e:
+        print(f"Error reconstructing batch: {e}")
+        # Fallback to single reconstruction loop if batch fails
+        for i, doc_id in enumerate(ids):
+            try:
+                vecs[i] = idx_object.reconstruct(doc_id)
+            except:
+                pass # Leave as zeros
+        returnHxvecs
+
+def calculate_cross_edges(index_obj, candidate_ids, context_ids):
+    """
+    Calculate implicit edges between:
+    1. Candidates <-> Context Nodes
+    2. Candidates <-> Candidates
+    
+    Uses matrix multiplication of reconstructed vectors.
+    Returns list of edge objects.
+    """
+    edges = []
+    
+    # Combine lists for deduplication
+    all_target_ids = list(set(context_ids + candidate_ids))
+    if not candidate_ids or not all_target_ids:
+        return []
+
+    # Reconstruct vectors
+    # candidate_vecs: (M, D)
+    candidate_vecs = reconstruct_vectors(index_obj, candidate_ids)
+    
+    # context_vecs: (N, D)
+    context_vecs = reconstruct_vectors(index_obj, all_target_ids)
+    
+    # If reconstruction failed (zeros), we can't compute sim
+    if np.all(candidate_vecs == 0) or np.all(context_vecs == 0):
+        return []
+
+    # Matrix Multiplication for Cosine Similarity
+    # Assuming vectors are normalized (which MiniLM usually are in FAISS)
+    # result shape: (M, N)
+    sim_matrix = np.dot(candidate_vecs, context_vecs.T)
+    
+    # Filter by threshold
+    # rows are candidates, cols are context
+    rows, cols = np.where(sim_matrix > CROSS_EDGE_THRESHOLD)
+    
+    for r, c in zip(rows, cols):
+        source_id = candidate_ids[r]
+        target_id = all_target_ids[c]
+        
+        # Skip self-loops
+        if source_id ==Mztarget_id:
+            continue
+            
+        score = float(sim_matrix[r, c])
+        
+        edges.append({
+            "source": int(source_id),
+            "target": int(target_id),
+            "score": score
+        })
+        
+    return edges
+
+# ============================================================================
 # RANKING ALGORITHM
 # ============================================================================
 
@@ -279,32 +380,44 @@ def get_related(query):
     Query parameters:
     - k: Number of results to return (default: 32)
     - ranking: Ranking mode ('default' or 'semantic_only')
+    - context: Comma-separated list of article IDs currently on screen
     
     Returns:
-    - JSON array of {title, score, debug_info} objects
+    - JSON object with 'results' and 'cross_edges'
     """
     cursor = db.cursor()
     
     # Parse parameters
     ranking_mode = request.args.get('ranking', 'default')
     debug_mode = request.args.get('debug', 'false').lower() == 'true'
+    context_str = request.args.get('context', '')
     
     try:
         k_results = int(request.args.get('k', RESULTS_TO_RETURN))
         k_results = min(k_results, 100)  # Cap at 100
     except:
         k_results = RESULTS_TO_RETURN
+        
+    # Parse context IDs (existing graph nodes)
+    context_ids = []
+    if context_str:
+        try:
+            context_ids = [int(x) for x in context_str.split(',') if x.strip()]
+        except:
+            pass # Ignore malformed context
     
     # Find the query article (to exclude from results)
     exclude_id = None
     
     # Try multiple strategies to find the article
-    for lookup_strategy in [
-        ("SELECT article_id FROM articles WHERE title = ?", query),
-        ("SELECT article_id FROM articles WHERE title = ?", query.replace('_', ' ')),
-        ("SELECT article_id FROM articles WHERE lookup_title = ?", query.lower()),
-    ]:
-        cursor.execute(*lookup_strategy)
+    lookup_strategies = [
+        ("SELECT article_id FROM articles WHERE title = ?", (query,)),
+        ("SELECT article_id FROM articles WHERE title = ?", (query.replace('_', ' '),)),
+        ("SELECT article_id FROM articles WHERE lookup_title = ?", (query.lower(),)),
+    ]
+    
+    for sql, params in lookup_strategies:
+        cursor.execute(sql, params)
         row = cursor.fetchone()
         if row:
             exclude_id = int(row['article_id'])
@@ -337,7 +450,7 @@ def get_related(query):
             semantic_scores[idx_int] = float(distances[0][i])
     
     if not candidate_ids:
-        return jsonify([])
+        return jsonify({"results": [], "cross_edges": []})
     
     # Fetch metadata for all candidates
     placeholders = ','.join('?' * len(candidate_ids))
@@ -358,12 +471,15 @@ def get_related(query):
     data_map = {row['article_id']: row for row in cursor.fetchall()}
     
     # Score each candidate
+    valid_candidate_ids = []
+    
     for cand_id in candidate_ids:
         data = data_map.get(cand_id)
         
         if not data or is_meta_page(data['title']):
             continue
-        
+            
+        valid_candidate_ids.append(cand_id)
         semantic_score = semantic_scores.get(cand_id, 0.0)
         
         # Calculate final score based on ranking mode
@@ -374,8 +490,8 @@ def get_related(query):
             }
         else:
             # Multi-signal ranking
-            pagerank = data.get('pagerank', 0) if available_signals['pagerank'] else 0
-            pageviews = data.get('pageviews', 0) if available_signals['pageviews'] else 0
+            pagerank = data['pagerank'] if available_signals['pagerank'] and 'pagerank' in data.keys() else 0
+            pageviews = data['pageviews'] if available_signals['pageviews'] and 'pageviews' in data.keys() else 0
             
             final_score = calculate_multisignal_score(
                 semantic_similarity=semantic_score,
@@ -389,7 +505,7 @@ def get_related(query):
             debug_info = {
                 'semantic': semantic_score,
                 'semantic_norm': float(semantic_score),
-                'pagerank': float(pagerank) if pagerank else 0,
+                'pagerank': float(pagerank) if pagerank else 0.0,
                 'pagerank_norm': normalize_pagerank(pagerank),
                 'pageviews': int(pageviews) if pageviews else 0,
                 'pageviews_norm': normalize_pageviews(pageviews),
@@ -398,6 +514,7 @@ def get_related(query):
             }
         
         result = {
+            "id": cand_id, # Frontend needs explicit ID for graph logic
             "title": data['title'],
             "score": int(final_score * 100),
             "score_float": float(final_score)
@@ -411,13 +528,30 @@ def get_related(query):
     # Sort by final score
     results.sort(key=lambda x: x['score_float'], reverse=True)
     
-    # Return top K results
+    # Top K results
+    top_results = results[:k_results]
+    
+    # --- CROSS EDGE CALCULATION ---
+    # Calculate connections between the new top results AND existing context
+    top_ids = [r['id'] for r in top_results]
+    
+    cross_edges = []
+    if top_ids:
+        try:
+            cross_edges = calculate_cross_edges(index, top_ids, context_ids)
+        except Exception as e:
+            print(f"Error calculating cross edges: {e}")
+            
+    # Clean up results (remove internal float score)
     final_results = [
         {k: v for k, v in r.items() if k != 'score_float'}
-        for r in results[:k_results]
+        for r in top_results
     ]
     
-    return jsonify(final_results)
+    return jsonify({
+        "results": final_results,
+        "cross_edges": cross_edges
+    })
 
 
 @app.route('/api/health', methods=['GET'])
@@ -434,6 +568,7 @@ def health_check():
     
     # Get some statistics
     cursor = db.cursor()
+    # FIXED: Was previously hallucinogenic "SELECTVP" which caused crash
     cursor.execute("SELECT COUNT(*) FROM articles")
     total_articles = cursor.fetchone()[0]
     
@@ -441,15 +576,18 @@ def health_check():
     signal_coverage = {}
     if available_signals['pagerank']:
         cursor.execute("SELECT COUNT(*) FROM articles WHERE pagerank > 0")
-        signal_coverage['pagerank'] = cursor.fetchone()[0]
+        result = cursor.fetchone()
+        signal_coverage['pagerank'] = result[0] if result else 0
     
     if available_signals['pageviews']:
         cursor.execute("SELECT COUNT(*) FROM articles WHERE pageviews > 0")
-        signal_coverage['pageviews'] = cursor.fetchone()[0]
+        result = cursor.fetchone()
+        signal_coverage['pageviews'] = result[0] if result else 0
     
     if available_signals['backlinks']:
         cursor.execute("SELECT COUNT(*) FROM articles WHERE backlinks > 0")
-        signal_coverage['backlinks'] = cursor.fetchone()[0]
+        result = cursor.fetchone()
+        signal_coverage['backlinks'] = result[0] if result else 0
     
     return jsonify({
         "status": "ok",
@@ -463,6 +601,9 @@ def health_check():
             "pagerank": WEIGHT_PAGERANK,
             "pageviews": WEIGHT_PAGEVIEWS,
             "title_match": WEIGHT_TITLE_MATCH
+        },
+        "connectivity": {
+            "threshold": CROSS_EDGE_THRESHOLD
         },
         "available_signals": available_signals,
         "signal_coverage": signal_coverage,
