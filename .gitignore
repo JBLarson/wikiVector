@@ -1,0 +1,51 @@
+data
+
+*.xml
+*.bz2
+*.gz
+
+# Python
+
+# virtual environment(s)
+s2Env/
+wvEnv/
+
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+.bash_history
+.bash_logout
+.bashrc
+.cache/
+.config/
+.lesshst
+.profile
+.ssh/
+
+.gitconfig
+
+conn.sh
+
+# testing suite results
+results
+results.db
