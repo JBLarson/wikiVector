@@ -24,7 +24,7 @@ import time
 # CONFIGURATION
 # ============================================================================
 
-METADATA_DB = "data/metadata.db"
+METADATA_DB = "../../../data/metadata.db"
 DAMPING_FACTOR = 0.85  # Standard PageRank damping (probability of following a link)
 ITERATIONS = 50        # Number of power iterations (convergence usually by 20-30)
 CONVERGENCE_THRESHOLD = 1e-6  # Stop early if change is tiny

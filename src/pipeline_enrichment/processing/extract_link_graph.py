@@ -29,8 +29,8 @@ from collections import defaultdict
 # CONFIGURATION
 # ============================================================================
 
-XML_CHUNK_DIR = "data/raw/xml_chunks"
-METADATA_DB = "data/metadata.db"
+XML_CHUNK_DIR = "../../../data/raw/xml_chunks"
+METADATA_DB = "../../../data/metadata.db"
 TEMP_DB_DIR = Path("/tmp/wiki_linkgraph_temp")
 CHECKPOINT_FILE = TEMP_DB_DIR / "completed_files.txt"
 
