@@ -19,6 +19,7 @@ import math
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import os
+import time
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -58,25 +59,67 @@ print("WIKIPEDIA SEMANTIC SEARCH API")
 print("="*80)
 
 print("\nLoading FAISS index...")
-index = faiss.read_index(INDEX_PATH)
-
-# IVF indices require a direct map for reconstruction (getting vector from ID)
-# We attempt to enable this if the index supports it
 try:
-    # Check if we are dealing with a wrapper (e.g., PreTransform) or raw index
-    index_to_config = index.index if hasattr(index, 'index') else index
-    if hasattr(index_to_config, 'make_direct_map'):
-        index_to_config.make_direct_map()
-        print("✓ Enabled direct map for IVF reconstruction")
+    index = faiss.read_index(INDEX_PATH)
+    print(f"✓ Index loaded: {index.ntotal} vectors")
 except Exception as e:
-    print(f"ℹ Note: Direct map configuration skipped: {e}")
+    print(f"CRITICAL ERROR: Could not load index at {INDEX_PATH}")
+    print(f"Error details: {e}")
+    index = faiss.IndexFlatL2(384)
 
+# Global flag to track if reconstruction is available
+CAN_RECONSTRUCT = True
+
+# Configure IVF index if applicable
 try:
-    ivf_index = faiss.downcast_index(index.index)
-    ivf_index.nprobe = 32
-    print(f"✓ IVF index loaded (nprobe={ivf_index.nprobe})")
-except:
-    print("✓ Flat index loaded")
+    # Handle both raw indices and wrapped indices (e.g., IndexPreTransform)
+    if hasattr(index, 'index'):
+        # Wrapped index (e.g., IndexPreTransform wrapping IndexIVF)
+        base_index = index.index
+    else:
+        base_index = index
+    
+    # Try to downcast to IVF
+    ivf_index = faiss.downcast_index(base_index)
+    
+    # Set nprobe for search quality
+    if hasattr(ivf_index, 'nprobe'):
+        ivf_index.nprobe = 32
+        print(f"✓ IVF index configured (nprobe={ivf_index.nprobe})")
+    
+    # Initialize direct map for reconstruction
+    if hasattr(ivf_index, 'make_direct_map'):
+        try:
+            ivf_index.make_direct_map()
+            # Test if reconstruction actually works
+            test_vec = ivf_index.reconstruct(0)
+            CAN_RECONSTRUCT = True
+            print("✓ Direct map initialized - cross-edges enabled")
+        except Exception as e:
+            print(f"⚠ Direct map initialization failed: {e}")
+            print("  Cross-edge calculation will be disabled")
+            CAN_RECONSTRUCT = False
+    else:
+        print("ℹ Index does not support direct map (might be flat index)")
+        # Flat indices can still reconstruct
+        try:
+            test_vec = base_index.reconstruct(0)
+            CAN_RECONSTRUCT = True
+            print("✓ Flat index - cross-edges enabled")
+        except:
+            CAN_RECONSTRUCT = False
+            print("⚠ Reconstruction not available - cross-edges disabled")
+            
+except Exception as e:
+    print(f"ℹ Index configuration: {e}")
+    # Try to test reconstruction anyway
+    try:
+        test_vec = index.reconstruct(0)
+        CAN_RECONSTRUCT = True
+        print("✓ Reconstruction available")
+    except:
+        CAN_RECONSTRUCT = False
+        print("⚠ Reconstruction not available - cross-edges disabled")
 
 print("\nLoading metadata database...")
 db = sqlite3.connect(METADATA_PATH, check_same_thread=False)
@@ -84,19 +127,24 @@ db.row_factory = sqlite3.Row
 
 # Verify available signals
 cursor = db.cursor()
-cursor.execute("PRAGMA table_info(articles)")
-columns = {row[1] for row in cursor.fetchall()}
+try:
+    cursor.execute("PRAGMA table_info(articles)")
+    columns = {row[1] for row in cursor.fetchall()}
 
-available_signals = {
-    'pagerank': 'pagerank' in columns,
-    'pageviews': 'pageviews' in columns,
-    'backlinks': 'backlinks' in columns
-}
+    available_signals = {
+        'pagerank': 'pagerank' in columns,
+        'pageviews': 'pageviews' in columns,
+        'backlinks': 'backlinks' in columns
+    }
+except Exception as e:
+    print(f"Warning: Could not verify columns: {e}")
+    available_signals = {'pagerank': False, 'pageviews': False, 'backlinks': False}
 
 print(f"\nAvailable signals:")
 print(f"  PageRank: {'✓' if available_signals['pagerank'] else '✗'}")
 print(f"  Pageviews: {'✓' if available_signals['pageviews'] else '✗'}")
 print(f"  Backlinks: {'✓' if available_signals['backlinks'] else '✗'}")
+print(f"  Cross-edges: {'✓' if CAN_RECONSTRUCT else '✗'}")
 
 print("\nLoading sentence transformer model...")
 model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
@@ -243,83 +291,126 @@ def reconstruct_vectors(idx_object, ids):
     """
     Safely reconstruct vectors for a list of IDs.
     Returns a numpy array of shape (len(ids), dim).
+    Returns None if reconstruction is not available.
     """
+    if not CAN_RECONSTRUCT:
+        return None
+        
     count = len(ids)
     if count == 0:
-        return np.array([], dtype=np.float32)
+        return np.zeros((0, idx_object.d), dtype=np.float32)
     
     # Prepare output buffer
     vecs = np.zeros((count, idx_object.d), dtype=np.float32)
     
     # FAISS expects int64
-    ids_arr = np.array(ids,dtype=np.int64)
+    ids_arr = np.array(ids, dtype=np.int64)
     
+    # Try batch reconstruction first
     try:
-        idx_object.reconstruct_batch(count, ids_arr, vecs)
+        # Try modern signature: (keys, recons)
+        idx_object.reconstruct_batch(ids_arr, vecs)
         return vecs
+    except TypeError:
+        try:
+            # Fallback to C++ style signature: (n, keys, recons)
+            idx_object.reconstruct_batch(count, ids_arr, vecs)
+            return vecs
+        except Exception:
+            pass
     except Exception as e:
-        print(f"Error reconstructing batch: {e}")
-        # Fallback to single reconstruction loop if batch fails
+        # Check if it's a direct map issue
+        if "direct map" in str(e).lower() or "invalid key" in str(e).lower():
+            # Direct map is broken, fall through to single reconstruction
+            pass
+        else:
+            print(f"Batch reconstruction error: {e}")
+            return None
+    
+    # Fallback: Single reconstruction (slower but more robust)
+    try:
         for i, doc_id in enumerate(ids):
             try:
-                vecs[i] = idx_object.reconstruct(doc_id)
-            except:
-                pass # Leave as zeros
+                vecs[i] = idx_object.reconstruct(int(doc_id))
+            except Exception as e:
+                # If any single reconstruction fails, the whole thing is broken
+                if i == 0:
+                    # First ID failed - reconstruction is broken
+                    return None
+                # Otherwise just skip this vector (leave as zeros)
+                pass
         return vecs
+    except Exception as e:
+        print(f"Single reconstruction failed: {e}")
+        return None
 
 def calculate_cross_edges(index_obj, candidate_ids, context_ids):
     """
-    Calculate implicit edges between:
-    1. Candidates <-> Context Nodes
-    2. Candidates <-> Candidates
-    
-    Uses matrix multiplication of reconstructed vectors.
-    Returns list of edge objects.
+    Calculate cross-edges using search instead of reconstruction.
+    Works with ANY index type.
     """
     edges = []
+    threshold = 0.65
     
-    # Combine lists for deduplication
-    all_target_ids = list(set(context_ids + candidate_ids))
-    if not candidate_ids or not all_target_ids:
+    # Get all unique IDs we need to check
+    all_ids = list(set(candidate_ids + context_ids))
+    
+    if len(all_ids) < 2:
         return []
-
-    # Reconstruct vectors
-    # candidate_vecs: (M, D)
-    candidate_vecs = reconstruct_vectors(index_obj, candidate_ids)
     
-    # context_vecs: (N, D)
-    context_vecs = reconstruct_vectors(index_obj, all_target_ids)
+    # For each candidate, search for similar vectors
+    cursor = db.cursor()
+    id_to_title = {}
     
-    # If reconstruction failed (zeros), we can't compute sim
-    if np.all(candidate_vecs == 0) or np.all(context_vecs == 0):
-        return []
-
-    # Matrix Multiplication for Cosine Similarity
-    # Assuming vectors are normalized (which MiniLM usually are in FAISS)
-    # result shape: (M, N)
-    sim_matrix = np.dot(candidate_vecs, context_vecs.T)
+    # Build ID -> Title mapping
+    placeholders = ','.join('?' * len(all_ids))
+    cursor.execute(f"SELECT article_id, title FROM articles WHERE article_id IN ({placeholders})", all_ids)
+    for row in cursor.fetchall():
+        id_to_title[row['article_id']] = row['title'].replace(' ', '_')
     
-    # Filter by threshold
-    # rows are candidates, cols are context
-    rows, cols = np.where(sim_matrix > CROSS_EDGE_THRESHOLD)
-    
-    for r, c in zip(rows, cols):
-        source_id = candidate_ids[r]
-        target_id = all_target_ids[c]
-        
-        # Skip self-loops
-        if source_id == target_id:
+    # For each candidate, do a targeted search
+    for cand_id in candidate_ids:
+        # Get the title for this candidate
+        if cand_id not in id_to_title:
             continue
             
-        score = float(sim_matrix[r, c])
+        title = id_to_title[cand_id].replace('_', ' ')
         
-        edges.append({
-            "source": int(source_id),
-            "target": int(target_id),
-            "score": score
-        })
-        
+        # Encode and search
+        try:
+            embedding = model.encode([title], normalize_embeddings=True, convert_to_numpy=True).astype(np.float32)
+            distances, indices = index.search(embedding, min(50, len(all_ids) * 2))
+            
+            # Check which results are in our context
+            for i, (dist, idx) in enumerate(zip(distances[0], indices[0])):
+                idx_int = int(idx)
+                
+                if idx_int == cand_id:
+                    continue  # Skip self
+                    
+                if idx_int in all_ids:
+                    # Convert distance to similarity (for L2 distance)
+                    similarity = float(dist)  # Already a similarity score from normalized vectors
+                    
+                    if similarity > threshold:
+                        src_title = id_to_title.get(cand_id)
+                        tgt_title = id_to_title.get(idx_int)
+                        
+                        if src_title and tgt_title:
+                            edges.append({
+                                "source": src_title,
+                                "target": tgt_title,
+                                "score": similarity
+                            })
+        except Exception as e:
+            print(f"Error processing {cand_id}: {e}")
+            continue
+    
     return edges
+
+
+
+
 
 # ============================================================================
 # RANKING ALGORITHM
@@ -380,7 +471,7 @@ def get_related(query):
     Query parameters:
     - k: Number of results to return (default: 32)
     - ranking: Ranking mode ('default' or 'semantic_only')
-    - context: Comma-separated list of article IDs currently on screen
+    - context: Comma-separated list of article TITLES currently on screen
     
     Returns:
     - JSON object with 'results' and 'cross_edges'
@@ -398,15 +489,25 @@ def get_related(query):
     except:
         k_results = RESULTS_TO_RETURN
         
-    # Parse context IDs (existing graph nodes)
+    # ---------------------------------------------------------
+    # 1. Resolve Context IDs
+    # Frontend sends Titles (strings), Backend needs IDs (ints)
+    # ---------------------------------------------------------
     context_ids = []
     if context_str:
-        try:
-            context_ids = [int(x) for x in context_str.split(',') if x.strip()]
-        except:
-            pass # Ignore malformed context
+        context_titles = [x.strip().replace('_', ' ') for x in context_str.split(',') if x.strip()]
+        if context_titles:
+            placeholders = ','.join('?' * len(context_titles))
+            sql = f"SELECT article_id FROM articles WHERE title IN ({placeholders})"
+            try:
+                cursor.execute(sql, context_titles)
+                context_ids = [row['article_id'] for row in cursor.fetchall()]
+            except Exception as e:
+                print(f"Error resolving context IDs: {e}")
     
-    # Find the query article (to exclude from results)
+    # ---------------------------------------------------------
+    # 2. Find Query Exclusion ID
+    # ---------------------------------------------------------
     exclude_id = None
     
     # Try multiple strategies to find the article
@@ -423,7 +524,9 @@ def get_related(query):
             exclude_id = int(row['article_id'])
             break
     
-    # Encode query to embedding
+    # ---------------------------------------------------------
+    # 3. Vector Search
+    # ---------------------------------------------------------
     try:
         search_text = query.replace('_', ' ')
         embedding = model.encode(
@@ -452,7 +555,9 @@ def get_related(query):
     if not candidate_ids:
         return jsonify({"results": [], "cross_edges": []})
     
-    # Fetch metadata for all candidates
+    # ---------------------------------------------------------
+    # 4. Fetch Metadata & Rank
+    # ---------------------------------------------------------
     placeholders = ','.join('?' * len(candidate_ids))
     
     # Build query dynamically based on available columns
@@ -514,14 +619,14 @@ def get_related(query):
             }
         
         result = {
-            "id": cand_id, # Frontend needs explicit ID for graph logic
-            "title": data['title'],
+            "id": cand_id,
+            "title": data['title'].replace(' ', '_'),
             "score": int(final_score * 100),
             "score_float": float(final_score)
         }
         
         if debug_mode:
-            result['debug'] =XZdebug_info
+            result['debug'] = debug_info
         
         results.append(result)
     
@@ -531,22 +636,26 @@ def get_related(query):
     # Top K results
     top_results = results[:k_results]
     
-    # --- CROSS EDGE CALCULATION ---
-    # Calculate connections between the new top results AND existing context
-    top_ids = [r['id'] for r in top_results]
+    # ---------------------------------------------------------
+    # 5. Calculate Cross Edges (Mesh Generation)
+    # ---------------------------------------------------------
+    
+    new_result_ids = [r['id'] for r in top_results]
     
     cross_edges = []
-    if top_ids:
+    if new_result_ids and CAN_RECONSTRUCT:
         try:
-            cross_edges = calculate_cross_edges(index, top_ids, context_ids)
+            cross_edges = calculate_cross_edges(index, new_result_ids, context_ids)
         except Exception as e:
             print(f"Error calculating cross edges: {e}")
+            import traceback
+            traceback.print_exc()
             
-    # Clean up results (remove internal float score)
-    final_results = [
-        {k: v for k, v in r.items() if k != 'score_float'}
-        for r in top_results
-    ]
+    # Clean up results
+    final_results = []
+    for r in top_results:
+        clean_r = {k: v for k, v in r.items() if k != 'score_float' and k != 'id'}
+        final_results.append(clean_r)
     
     return jsonify({
         "results": final_results,
@@ -602,7 +711,8 @@ def health_check():
             "title_match": WEIGHT_TITLE_MATCH
         },
         "connectivity": {
-            "threshold": CROSS_EDGE_THRESHOLD
+            "threshold": CROSS_EDGE_THRESHOLD,
+            "enabled": CAN_RECONSTRUCT
         },
         "available_signals": available_signals,
         "signal_coverage": signal_coverage,
